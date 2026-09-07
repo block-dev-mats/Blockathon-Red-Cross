@@ -3,3 +3,11 @@
 .env.*
 !.env.example
 !.env.*.example
+
+# Installed dependencies, local builds and browser verification artifacts.
+node_modules/
+dist/
+output/
+.playwright-cli/
+*.log
+.DS_Store
