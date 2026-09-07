@@ -8,7 +8,7 @@ The problem concerns secure, scalable communication for humanitarian volunteers 
 
 ## Current state and team workflow
 
-The repository now contains a local interactive concept prototype for team discussion: three simultaneous views show an authorized coordinator, a forwarded copy outside the official publishing flow, and a volunteer receiving automatically checked messages. All roles and scenarios are fictional. Signing and chain checks are simulated, without cryptography, backend, external integrations or official organizational verification. There is no CI workflow.
+The repository now contains a local interactive concept prototype for team discussion: two simultaneous views show an authorized coordinator and a subscribed volunteer receiving automatically checked messages; the forwarding scenario adds an editable copy as an alternative transport path. All roles and scenarios are fictional. Signing and chain checks are simulated, without cryptography, backend, external integrations or official organizational verification. There is no CI workflow.
 
 The following are team working rules, not requirements attributed to the problem statement: ChatGPT supports Mats with product decisions and task contracts; Codex implements bounded assignments and delivers through GitHub. See [AGENTS.md](AGENTS.md). Priorities are low recipient friction, a reproducible demo, and explicit trust assumptions.
 
@@ -29,18 +29,20 @@ Open http://127.0.0.1:5175. The server uses a strict port and binds only to loop
 
 ## Present and reset
 
-The Swedish scenario buttons prepare a starting state; nothing plays automatically. Use **Publicera** and **Vidarebefordra** to drive events:
+The Swedish scenario buttons prepare a starting state. **Publicera** drives direct delivery and automatic checking; the recipient needs no verification button:
 
-- **Oförändrat:** edit the initial message if desired, publish, then forward. The volunteer checks it automatically.
-- **Ändrad kopia:** starts with a published 14.00 original and an editable 16.00 copy. Forward the copy, or enter any other text, to compare it with the original. Restore the original text to demonstrate an intact copy in the same scenario.
-- **Officiell uppdatering:** starts with version 1 already received and checked. Publish the prepared 16.00 update, then forward it. The earlier version becomes replaced.
-- **Utan uppkoppling:** starts with a message checked at the fictional time 13.50. Select **Koppla från volontären**. You can publish an update while disconnected, but forwarding is blocked. **Återanslut volontären** automatically refreshes the old message's status; forwarding the new version remains a separate action.
+- **Publicering:** edit the message if desired, then publish. Kim receives the complete package through the preset subscription to Övning Norr.
+- **Vidarebefordran:** starts with an official original already received by Kim. Forward the copy unchanged or edit any text first. The received copy has its own result and cannot overwrite the official original. Editing after sending only changes the next copy; the sent snapshot finishes its check unchanged.
+- **Uppdatering:** starts with received version 1. Publish the prepared 16.00 update; it is delivered automatically. After checking, version 2 is current and version 1 is replaced, with its original text retained.
+- **Utan uppkoppling:** starts with a message checked at fictional time 13.50. Select **Koppla från volontären**, then publish an update. Kim receives no new content or status during the interruption. **Återanslut volontären** automatically retrieves missed official packages and fresh status, then checks them.
 
-**Återställ** restores the selected scenario's starting state, including text, connection and evidence. Reloading returns to **Oförändrat**. Nothing persists. Controls support Tab and Enter/Space; text fields support standard keyboard editing. Reduced-motion preferences disable transitions. Aim for a 1280×800 or larger viewport for the simultaneous scene; smaller screens stack the views.
+**Återställ** restores the selected scenario, including text, connection and evidence. Reloading returns to **Publicering**. Nothing persists. **Så fungerar verifieringen** opens a proposed-architecture explanation and a package example using current model values; it starts collapsed and expands in the normal page flow. Delivery, signing and chain checks are all local simulations, with no real hashes or signatures.
+
+Use Tab and Enter/Space for controls and the disclosure, and standard keyboard editing in text fields. Reduced-motion preferences disable transitions. At 1280×800 or larger the phones fit side by side; smaller screens stack them. Scroll the page to read the expanded technical explanation; long messages or extended reception history can scroll within a phone.
 
 ## Model and checks
 
-`src/model.ts` owns immutable published packets, the explicit sender/context allowlist, field comparisons, replacement references and independent integrity/authority/status results. `src/simulation.ts` owns scenario preparation and event transitions; delayed UI checks use generation tokens so obsolete results cannot overwrite newer state. Scenario names never determine verification results. All status data is synthetic; the offline control simulates loss of the recipient's status connection, not an offline delivery platform. The demo allowlist is the trust root, not real Swedish Red Cross authorization.
+`src/model.ts` owns immutable published packets, the explicit sender/context allowlist, field comparisons, replacement references and independent integrity/authority/status results. `src/simulation.ts` separates the publisher registry, recipient-local evidence, queued deliveries, immutable received snapshots and editable copies. Reception IDs are independent of message IDs and references. Generation and revision tokens reject obsolete delivery/check callbacks after reset, scenario changes, disconnects or newer reception batches; editing a copy leaves existing callbacks and received packets intact. Scenario names never determine verification results. All status data is synthetic; the offline control simulates loss of the recipient's status connection, not an offline delivery platform. The demo allowlist is the trust root, not real Swedish Red Cross authorization.
 
 ```sh
 npm test
@@ -48,4 +50,4 @@ npm run build
 git diff --check
 ```
 
-The focused model tests cover all four flows, arbitrary content/metadata changes, unknown evidence, unauthorized senders, stale status, replacement rules, Unicode differences, reset and delayed-result cancellation. Browser verification is performed locally; no browser test runner is installed as a project dependency.
+The focused model tests cover all four flows, direct delivery, official updates, arbitrary content/metadata changes, unknown evidence, unauthorized senders/keys, subscription context, stale status, offline catch-up, Unicode differences, editing during receipt checks, reset and obsolete callbacks. Browser verification is performed locally; no browser test runner is installed as a project dependency.

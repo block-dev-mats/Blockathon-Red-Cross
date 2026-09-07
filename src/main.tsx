@@ -2,34 +2,41 @@ import { StrictMode, useEffect, useReducer } from "react";
 import { createRoot } from "react-dom/client";
 import { difference, SENDERS } from "./model.ts";
 import type { Packet } from "./model.ts";
-import { initial, reducer } from "./simulation.ts";
+import { currentOfficial, initial, reducer } from "./simulation.ts";
 import type { Receipt, Scenario } from "./simulation.ts";
+import { VerificationDetails } from "./VerificationDetails.tsx";
 import "./styles.css";
 
 const scenarios: { id: Scenario; name: string }[] = [
-  { id: "unchanged", name: "Oförändrat" },
-  { id: "changed", name: "Ändrad kopia" },
-  { id: "update", name: "Officiell uppdatering" },
+  { id: "publication", name: "Publicering" },
+  { id: "forwarding", name: "Vidarebefordran" },
+  { id: "update", name: "Uppdatering" },
   { id: "offline", name: "Utan uppkoppling" },
 ];
 const notes: Record<string, string> = {
   ready:
-    "I målarkitekturen signerar en behörig publicerare innehåll och tolkningsbärande metadata: meddelande-ID, version, avsändare och sammanhang.",
+    "Kim prenumererar på Övning Norr; publicering skickar paketet direkt via en meddelandetjänst utanför kedjan.",
   published:
-    "Ett innehållsfingeravtryck och publiceringsbevis förankras på kedjan som ett gemensamt kontrollerbart publiceringsregister; innehållet ligger utanför och dess sanningshalt garanteras inte.",
-  copy: "Kopian behåller originalets verifieringsreferens, så mottagaren kan jämföra hela paketet med det publicerade underlaget.",
+    "Först levererar meddelandetjänsten hela paketet, därefter kontrollerar mottagarappen det mot publiceringsunderlaget.",
+  "published-offline":
+    "Publiceringen finns hos Alex, men varken det nya paketet eller dess status når Kim under avbrottet.",
+  "copy-ready":
+    "Originalet har levererats direkt; kopian visar en alternativ transportväg med samma ursprung och verifieringsreferens.",
+  copy: "Redigering påverkar bara nästa kopia som skickas; redan mottagna paket och deras kontroller ligger kvar.",
+  forwarded:
+    "En kopia får en egen mottagning och kontroll, även när den hänvisar till ett redan känt original.",
   received:
-    "Mottagaren kontrollerar paketet automatiskt mot publiceringsunderlaget och organisationens lista över behöriga avsändare; vidarebefordran bevarar ursprungsavsändaren.",
+    "Mottagning ger inget godkännande i sig; text, identiteter och sammanhang kontrolleras tillsammans innan ett paket kan bli aktuellt.",
+  checked:
+    "Appen jämför paketet med rätt publiceringspost och kontrollerar signatur, behörighet och färsk status var för sig.",
   "update-ready":
-    "En officiell uppdatering får ett eget godkännande och en uttrycklig hänvisning till den version som ersätts.",
-  updated:
-    "Den nya versionen får ett eget publiceringsbevis och ersätter den tidigare versionen i det gemensamma registret.",
+    "En uppdatering är ett nytt godkänt paket som uttryckligen ersätter den tidigare versionen och levereras till prenumeranterna.",
   "connection-ready":
-    "Lokal signaturkontroll kräver inte en levande kedjeanslutning, men färska återkallelser kräver nytt statusunderlag.",
+    "Lokal signaturkontroll kan bestå utan uppkoppling, men färska ersättningar och återkallelser kräver nytt statusunderlag.",
   offline:
-    "Lokal signaturkontroll kan bestå utan kedjeanslutning, men nya uppdateringar och återkallelser kan inte uteslutas utan färskt statusunderlag.",
+    "Det lokala paketet kan fortfarande kontrolleras, men utan färskt underlag går det inte att veta om det har ersatts eller återkallats.",
   reconnected:
-    "Återanslutning hämtar aktuellt statusunderlag automatiskt, även för meddelanden som redan finns hos mottagaren.",
+    "Återanslutning hämtar både missade officiella paket och färskt statusunderlag för automatisk kontroll.",
 };
 
 function Icon({
@@ -100,11 +107,14 @@ function Meta({ packet }: { packet: Packet }) {
   );
 }
 
-function Message({ receipt, pending }: { receipt: Receipt; pending: boolean }) {
-  const { packet, result } = receipt;
+function Message({ receipt, current }: { receipt: Receipt; current: boolean }) {
+  const { packet, result, checking: pending } = receipt;
+  const isCopy = receipt.route === "forwarded";
   const changed = result?.integrity === "changed";
   const unavailable =
-    result?.integrity === "unavailable" || result?.authority === "unavailable";
+    !result ||
+    result.integrity === "unavailable" ||
+    result.authority === "unavailable";
   const replaced = result?.status === "replaced";
   const diff =
     changed && result.original
@@ -122,7 +132,9 @@ function Message({ receipt, pending }: { receipt: Receipt; pending: boolean }) {
             ? "Återkallat"
             : replaced
               ? "Ersatt av ny version"
-              : "Behörig avsändare · Oförändrat";
+              : current
+                ? "Behörig avsändare · Aktuell"
+                : "Behörig avsändare · Oförändrat";
   const tone = pending
     ? "neutral"
     : changed ||
@@ -134,7 +146,12 @@ function Message({ receipt, pending }: { receipt: Receipt; pending: boolean }) {
         ? "neutral"
         : "success";
   return (
-    <article className={`message received ${replaced ? "replaced" : ""}`}>
+    <article
+      className={`message received ${replaced ? "replaced" : ""} ${isCopy ? "received-copy" : ""}`}
+      data-receipt-id={receipt.id}
+      data-route={receipt.route}
+    >
+      {isCopy && <p className="copy-title">Mottagen kopia</p>}
       <Meta packet={packet} />
       <p className="message-text">
         {diff ? (
@@ -182,15 +199,41 @@ function Message({ receipt, pending }: { receipt: Receipt; pending: boolean }) {
 function App() {
   const [state, dispatch] = useReducer(reducer, undefined, () => initial());
   const latest = state.registry.at(-1);
+  const showCopy = state.scenario === "forwarding";
+  const official = state.receipts.filter((r) => r.route === "official");
+  const lastCopy = [...state.receipts]
+    .reverse()
+    .find((r) => r.route === "forwarded");
+  const current = currentOfficial(state);
+  const hasDelivery =
+    state.online && (state.deliveries.length > 0 || state.syncRequested);
+  const hasChecks = state.online && state.receipts.some((r) => r.checking);
   useEffect(() => {
-    if (!state.pending) return;
-    const generation = state.generation;
+    if (!hasDelivery) return;
     const timer = window.setTimeout(
-      () => dispatch({ type: "checked", generation }),
+      () =>
+        dispatch({
+          type: "delivered",
+          generation: state.generation,
+          revision: state.deliveryRevision,
+        }),
+      180,
+    );
+    return () => window.clearTimeout(timer);
+  }, [hasDelivery, state.generation, state.deliveryRevision]);
+  useEffect(() => {
+    if (!hasChecks) return;
+    const timer = window.setTimeout(
+      () =>
+        dispatch({
+          type: "checked",
+          generation: state.generation,
+          revision: state.checkRevision,
+        }),
       550,
     );
     return () => window.clearTimeout(timer);
-  }, [state.pending, state.generation]);
+  }, [hasChecks, state.generation, state.checkRevision]);
 
   return (
     <main>
@@ -231,7 +274,7 @@ function App() {
         )}
       </div>
 
-      <div className="scene">
+      <div className={`scene ${showCopy ? "with-copy" : "direct"}`}>
         <section className="stage" aria-labelledby="coordinator-title">
           <div className="stage-heading">
             <div>
@@ -246,7 +289,7 @@ function App() {
             <div className="person">
               <span className="avatar">A</span>
               <div>
-                <strong>{String(SENDERS[0].name)}</strong>
+                <strong>{SENDERS[0].name}</strong>
                 <span>Behörig publicerare</span>
               </div>
               <span className="person-mark">
@@ -296,72 +339,72 @@ function App() {
           </div>
         </section>
 
-        <section className="stage" aria-labelledby="forward-title">
-          <div className="stage-heading">
-            <div>
-              <span className="eyebrow">Utanför publiceringsflödet</span>
-              <h2 id="forward-title">Vidarebefordran</h2>
+        {showCopy && (
+          <section className="stage" aria-labelledby="forward-title">
+            <div className="stage-heading">
+              <div>
+                <span className="eyebrow">Alternativ transportväg</span>
+                <h2 id="forward-title">Vidarebefordran</h2>
+              </div>
+              <span className="flow-arrow">
+                <Icon kind="arrow" />
+              </span>
             </div>
-            <span className="flow-arrow">
-              <Icon kind="arrow" />
-            </span>
-          </div>
-          <div className="phone transport">
-            <div className="transport-heading">
-              <Icon kind="document" />
-              <strong>Vidarebefordrad kopia</strong>
-            </div>
-            <div className="phone-body">
-              {state.copy ? (
-                <>
-                  <div className="message copy-message">
-                    <Meta packet={state.copy} />
-                    <label className="sr-only" htmlFor="forwarded-message">
-                      Text i kopian
-                    </label>
-                    <textarea
-                      id="forwarded-message"
-                      value={state.copy.text}
-                      onChange={(e) =>
-                        dispatch({ type: "copy", text: e.target.value })
-                      }
-                      maxLength={500}
-                      spellCheck={false}
-                    />
-                  </div>
-                  <p className="copy-hint">Prova att ändra kopians text.</p>
-                  <button
-                    className="primary dark"
-                    onClick={() => dispatch({ type: "forward" })}
-                    disabled={
-                      !state.online || !state.copy.text.trim() || state.pending
-                    }
-                  >
-                    <Icon kind="arrow" />
-                    Vidarebefordra
-                  </button>
-                  {!state.online && (
-                    <p className="delivery-block">
-                      Volontären är frånkopplad. Kopian stannar här.
+            <div className="phone transport">
+              <div className="transport-heading">
+                <Icon kind="document" />
+                <strong>Vidarebefordrad kopia</strong>
+              </div>
+              <div className="phone-body">
+                {state.copy ? (
+                  <>
+                    <div className="message copy-message">
+                      <Meta packet={state.copy} />
+                      <label className="sr-only" htmlFor="forwarded-message">
+                        Text i kopian
+                      </label>
+                      <textarea
+                        id="forwarded-message"
+                        value={state.copy.text}
+                        onChange={(e) =>
+                          dispatch({ type: "copy", text: e.target.value })
+                        }
+                        maxLength={500}
+                        spellCheck={false}
+                      />
+                    </div>
+                    <p className="copy-hint">Prova att ändra kopians text.</p>
+                    <button
+                      className="primary dark"
+                      onClick={() => dispatch({ type: "forward" })}
+                      disabled={!state.online || !state.copy.text.trim()}
+                    >
+                      <Icon kind="arrow" />
+                      Vidarebefordra
+                    </button>
+                    {!state.online && (
+                      <p className="delivery-block">
+                        Volontären är frånkopplad. Kopian stannar här.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  <div className="empty">
+                    <span className="empty-icon">
+                      <Icon kind="document" />
+                    </span>
+                    <strong>Här hamnar kopian</strong>
+                    <p>
+                      Publicera ett meddelande
+                      <br />
+                      för att börja.
                     </p>
-                  )}
-                </>
-              ) : (
-                <div className="empty">
-                  <span className="empty-icon">
-                    <Icon kind="document" />
-                  </span>
-                  <strong>Här hamnar kopian</strong>
-                  <p>
-                    Publicera ett meddelande
-                    <br />
-                    för att börja.
-                  </p>
-                </div>
-              )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
         <section className="stage" aria-labelledby="volunteer-title">
           <div className="stage-heading">
@@ -377,7 +420,7 @@ function App() {
               <span className="avatar volunteer-avatar">K</span>
               <div>
                 <strong>Kim</strong>
-                <span>Volontär · Övning Norr</span>
+                <span>Prenumererar på Övning Norr</span>
               </div>
             </div>
             <div className="phone-body inbox">
@@ -386,33 +429,32 @@ function App() {
                   <Icon kind="offline" />
                   <span>
                     Offline ·{" "}
-                    {state.evidence
-                      ? `Senast kontrollerat ${state.evidence.checkedAt}`
-                      : "Statusunderlag saknas"}
+                    {state.lastCheckedAt
+                      ? `Senast kontrollerat ${state.lastCheckedAt}`
+                      : "Ingen slutförd kontroll"}
                   </span>
                 </div>
               )}
-              {state.receipts.length ? (
-                [...state.receipts]
-                  .reverse()
-                  .map((r) => (
-                    <Message
-                      key={r.packet.reference}
-                      receipt={r}
-                      pending={state.pending}
-                    />
-                  ))
-              ) : (
+              {hasDelivery && (
+                <p className="delivery-status" role="status">
+                  Tar emot…
+                </p>
+              )}
+              {[...official].reverse().map((r) => (
+                <Message
+                  key={r.id}
+                  receipt={r}
+                  current={r.id === current?.id}
+                />
+              ))}
+              {lastCopy && <Message receipt={lastCopy} current={false} />}
+              {!state.receipts.length && !hasDelivery && (
                 <div className="empty">
                   <span className="empty-icon">
                     <Icon kind="send" />
                   </span>
                   <strong>Inget meddelande ännu</strong>
-                  <p>
-                    Vidarebefordra kopian
-                    <br />
-                    till volontären.
-                  </p>
+                  <p>Nästa publicering kommer hit automatiskt.</p>
                 </div>
               )}
             </div>
@@ -426,11 +468,15 @@ function App() {
         </span>
         <div>
           <p className="simulation-label">
-            Signering och kedjekontroll simuleras.
+            Leverans, signering och kedjekontroll simuleras.
           </p>
           <p>{notes[state.event]}</p>
         </div>
       </aside>
+      <VerificationDetails
+        key={`${state.scenario}-${state.generation}`}
+        state={state}
+      />
     </main>
   );
 }

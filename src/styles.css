@@ -41,7 +41,8 @@ textarea {
     border-color 0.15s;
 }
 button:focus-visible,
-textarea:focus-visible {
+textarea:focus-visible,
+summary:focus-visible {
   outline: 3px solid #3465a0;
   outline-offset: 4px;
 }
@@ -51,7 +52,7 @@ button:not(:disabled):hover {
 main {
   max-width: 1256px;
   margin: 0 auto;
-  padding: 32px 42px 22px;
+  padding: 24px 42px 22px;
 }
 .controls {
   display: flex;
@@ -95,7 +96,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 63px;
+  height: 55px;
   font-size: 12px;
   color: #69716d;
   letter-spacing: 0.025em;
@@ -119,6 +120,104 @@ main {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 38px;
+}
+.scene.direct {
+  grid-template-columns: repeat(2, minmax(0, 365px));
+  justify-content: center;
+  gap: 100px;
+}
+.direct .flow-arrow {
+  transform: translateX(64px);
+}
+.with-copy .flow-arrow {
+  opacity: 0.7;
+}
+.with-copy .inbox {
+  gap: 12px;
+  padding: 18px;
+}
+.with-copy [data-route="official"] .message-text {
+  margin: 16px 0;
+}
+.with-copy .received-copy {
+  padding: 13px;
+}
+.copy-title {
+  margin: 0 0 9px;
+  font-size: 11px;
+  font-weight: 650;
+  color: #667063;
+}
+.received-copy {
+  background: #f9f9f6;
+  border-style: dashed;
+}
+.received-copy .message-text {
+  font-size: 16px;
+  margin: 12px 0;
+}
+.delivery-status {
+  margin: 0;
+  font-size: 12px;
+  color: #69746b;
+}
+.verification-details {
+  margin: 6px 4px 0;
+  border-top: 1px solid #daddd3;
+  color: #52604f;
+  font-size: 13px;
+}
+.verification-details summary {
+  cursor: pointer;
+  padding: 12px 0;
+  width: fit-content;
+  font-weight: 600;
+}
+.details-body {
+  padding: 8px 0 24px;
+}
+.architecture-label {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 11px;
+  margin: 0 0 20px;
+}
+.mechanism-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.65fr);
+  gap: 36px;
+}
+.mechanism-grid h3 {
+  font-size: 14px;
+  color: #303d30;
+  margin: 0 0 8px;
+}
+.mechanism-grid p {
+  line-height: 1.7;
+  margin: 0;
+}
+.package-example pre {
+  margin: 14px 0;
+  padding: 18px;
+  border: 1px solid #dce0d5;
+  background: #fafbf7;
+  border-radius: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.package-example > p {
+  font-size: 11px;
+  color: #71806b;
+}
+.mechanism-blocks {
+  display: grid;
+  gap: 22px;
+}
+.mechanism-blocks code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .stage-heading {
   display: flex;
@@ -458,11 +557,11 @@ del {
 .technical {
   display: flex;
   gap: 15px;
-  margin-top: 25px;
+  margin-top: 18px;
   padding: 0 4px;
   color: #667160;
   max-width: 1030px;
-  min-height: 55px;
+  min-height: 42px;
   font-size: 12px;
   line-height: 1.65;
 }
@@ -493,19 +592,19 @@ del {
 }
 @media (min-width: 1350px) and (min-height: 850px) {
   main {
-    padding-top: 44px;
+    padding-top: 32px;
   }
   .scene-context {
-    height: 78px;
+    height: 66px;
   }
   .phone {
-    height: 530px;
+    height: 510px;
   }
   .stage-heading {
     margin-bottom: 21px;
   }
   .technical {
-    margin-top: 29px;
+    margin-top: 20px;
   }
 }
 @media (max-width: 1100px) {
@@ -514,6 +613,12 @@ del {
   }
   .scene {
     gap: 23px;
+  }
+  .scene.direct {
+    gap: 60px;
+  }
+  .direct .flow-arrow {
+    transform: translateX(40px);
   }
   .phone-body {
     padding: 17px;
@@ -557,7 +662,8 @@ del {
   .reset {
     font-size: 12px;
   }
-  .scene {
+  .scene,
+  .scene.direct {
     grid-template-columns: 1fr;
     gap: 28px;
     max-width: 390px;
@@ -569,6 +675,13 @@ del {
   .flow-arrow {
     transform: rotate(90deg);
     margin-right: 10px;
+  }
+  .direct .flow-arrow {
+    transform: rotate(90deg);
+  }
+  .mechanism-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
   }
   .scene-context {
     height: auto;

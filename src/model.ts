@@ -1,9 +1,9 @@
 // A deterministic evidence simulator, deliberately without cryptography or network I/O.
 export const CONTEXT = "ovning-norr:volontarer";
 export const SENDERS = Object.freeze(
-  [{ id: "demo-alex", name: "Alex", context: CONTEXT }].map((sender) =>
-    Object.freeze(sender),
-  ),
+  [
+    { id: "demo-alex", keyId: "demo-key-alex", name: "Alex", context: CONTEXT },
+  ].map((sender) => Object.freeze(sender)),
 );
 export const ORIGINAL = "Samling vid Norra mötesplatsen kl. 14.00.";
 export const UPDATED = "Samling vid Norra mötesplatsen kl. 16.00.";
@@ -13,6 +13,7 @@ export type Packet = Readonly<{
   id: string;
   version: number;
   sender: string;
+  keyId: string;
   context: string;
   text: string;
   replaces: string | null;
@@ -56,6 +57,7 @@ export function publish(
     id: previous?.id ?? `message-${sequence}`,
     version: previous ? previous.version + 1 : 1,
     sender,
+    keyId: SENDERS.find((s) => s.id === sender)!.keyId,
     context,
     text,
     replaces,
@@ -100,6 +102,7 @@ export function verify(
     "id",
     "version",
     "sender",
+    "keyId",
     "context",
     "text",
     "replaces",
@@ -110,6 +113,7 @@ export function verify(
   const authority = SENDERS.some(
     (s) =>
       s.id === packet.sender &&
+      s.keyId === packet.keyId &&
       s.context === packet.context &&
       s.context === expectedContext,
   )
