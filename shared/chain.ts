@@ -2,12 +2,13 @@ import { createPublicClient, defineChain, http, keccak256, zeroHash } from "viem
 import type { PublicClient, Hex } from "viem";
 import { abi, publicationEvent } from "./protocol.ts";
 import type { Envelope, TrustConfig } from "./protocol.ts";
+import { profileForChain } from "./profiles.ts";
 
 export function chainFor(config: TrustConfig) {
-  return defineChain({ id: config.domain.chainId, name: "Lokalt EVM-nät", nativeCurrency: { name: "Test Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } });
+  return defineChain({ id: config.domain.chainId, name: profileForChain(config.domain.chainId).label, nativeCurrency: { name: "Test Ether", symbol: "ETH", decimals: 18 }, rpcUrls: { default: { http: [config.rpcUrl] } } });
 }
 export function rpcClient(config: TrustConfig) {
-  return createPublicClient({ chain: chainFor(config), transport: http(config.rpcUrl, { retryCount: 0, timeout: 3500 }), cacheTime: 0 });
+  return createPublicClient({ chain: chainFor(config), transport: http(config.rpcUrl, { retryCount: 0, timeout: profileForChain(config.domain.chainId).rpcTimeout }), cacheTime: 0 });
 }
 export type ChainSnapshot = { version: number; digest: Hex; blockNumber: bigint; blockHash: Hex; checkedAt: string };
 export type PublicationProof = { txHash: Hex; publicationBlock: bigint };
@@ -26,7 +27,7 @@ export async function readSnapshot(client: PublicClient, config: TrustConfig): P
     client.readContract({ address: config.domain.verifyingContract, abi, functionName: "head", blockNumber }),
   ]);
   if (genesis.hash !== config.genesisHash || deployment.hash !== config.deploymentBlockHash ||
-      !code || keccak256(code) !== config.codeHash) throw new Error("Nätet eller kontraktet motsvarar inte lokal deployment.");
+      !code || keccak256(code) !== config.codeHash) throw new Error("Nätet eller kontraktet motsvarar inte vald deployment.");
   if (context[0].toLowerCase() !== config.publisher || context[1] !== config.organisation || context[2] !== config.feed || context[3] !== config.messageId)
     throw new Error("Kontraktets behörighet eller sammanhang är fel.");
   if ((head[0] === 0) !== (head[1] === zeroHash)) throw new Error("Ogiltig registerstatus.");

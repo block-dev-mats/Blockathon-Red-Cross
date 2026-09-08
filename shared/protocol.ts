@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { hashTypedData, keccak256, parseAbi, recoverTypedDataAddress, toBytes, zeroHash } from "viem";
+import { profileById, SEPOLIA_GENESIS, validRpcUrl } from "./profiles.ts";
+import type { ProfileId } from "./profiles.ts";
 
 export const hex32 = z.string().regex(/^0x[0-9a-fA-F]{64}$/).transform(v => v.toLowerCase() as `0x${string}`);
 export const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/).transform(v => v.toLowerCase() as `0x${string}`);
@@ -10,7 +12,7 @@ export const messageSchema = z.strictObject({
   version: z.number().int().min(1).max(4294967295), previousDigest: hex32,
 });
 export const domainSchema = z.strictObject({
-  name: z.literal("CrisisMessage"), version: z.literal("1"), chainId: z.literal(31337), verifyingContract: address,
+  name: z.literal("CrisisMessage"), version: z.literal("1"), chainId: z.union([z.literal(31337), z.literal(11155111)]), verifyingContract: address,
 });
 export const unsignedSchema = z.strictObject({ body: bodySchema, domain: domainSchema, message: messageSchema });
 export const envelopeSchema = unsignedSchema.extend({
@@ -19,11 +21,21 @@ export const envelopeSchema = unsignedSchema.extend({
 });
 export const configSchema = z.strictObject({
   domain: domainSchema,
-  rpcUrl: z.string().regex(/^http:\/\/127\.0\.0\.1:[0-9]{2,5}$/),
+  rpcUrl: z.string(),
+  rpcVisibility: z.literal("public-browser").optional(),
+  deploymentTxHash: hex32.optional(),
   publisher: address, organisation: hex32, feed: hex32, messageId: hex32,
   genesisHash: hex32, deploymentBlock: z.string().regex(/^[0-9]+$/), deploymentBlockHash: hex32, codeHash: hex32,
-});
+}).refine(c => validRpcUrl(c.domain.chainId, c.rpcUrl), "RPC-adressen är inte tillåten för nätverket.")
+  .refine(c => c.domain.chainId !== 11155111 || c.rpcVisibility === "public-browser", "Sepolia kräver en uttryckligen publik browser-RPC.");
 export type TrustConfig = z.infer<typeof configSchema>;
+export function parseConfig(raw: unknown, profile: ProfileId): TrustConfig {
+  const config = configSchema.parse(raw);
+  if (config.domain.chainId !== profileById(profile).chainId) throw new Error("Deploymenten tillhör inte den valda profilen.");
+  if (profile === "sepolia" && config.genesisHash !== SEPOLIA_GENESIS) throw new Error("Fel genesis för Ethereum Sepolia L1.");
+  return config;
+}
+export const deploymentIdentity = (c: TrustConfig) => `${c.domain.chainId}:${c.genesisHash}:${c.domain.verifyingContract}:${c.deploymentBlockHash}:${c.codeHash}`;
 export type Unsigned = z.infer<typeof unsignedSchema>;
 export type Envelope = z.infer<typeof envelopeSchema>;
 export const types = { Message: [

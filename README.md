@@ -8,13 +8,13 @@ The problem concerns secure, scalable communication for humanitarian volunteers 
 
 ## Current state and team workflow
 
-The repository contains two separate applications. The original five-scenario **presentation at `/` is unchanged and simulated**. The **MVP at `/publish` and `/inbox`** uses real EIP-712 signatures, a Node/TypeScript API, SQLite and a deployed contract on a persistent local Anvil chain. Alex publishes; Kim receives and verifies automatically in an independent browser session. Both applications use fictional scenarios and an explicit Demoorganisation, not official Swedish Red Cross credentials. There is no CI workflow.
+The original five-scenario **presentation at `/` is unchanged and simulated**. The **MVP at `/publish` and `/inbox`** uses real EIP-712 signatures, a Node/TypeScript API, SQLite and CrisisRegistry. It has two explicit runtime profiles: persistent local Anvil and Ethereum Sepolia L1. **Both profiles use the same frontend, backend, verifier, signing format and contract source.** Alex publishes; Kim receives and verifies automatically in an independent browser session. All examples use fictional scenarios and an explicit Demoorganisation, not official Swedish Red Cross credentials. There is no CI workflow. Sepolia requires the operator's configuration and explicit deployment; no public deployment address is supplied or assumed by the repository.
 
 The following are team working rules, not requirements attributed to the problem statement: ChatGPT supports Mats with product decisions and task contracts; Codex implements bounded assignments and delivers through GitHub. See [AGENTS.md](AGENTS.md). Priorities are low recipient friction, a reproducible demo, and explicit trust assumptions.
 
 ## Selected MVP decisions
 
-The implementation assignment selected the existing React/TypeScript/Vite frontend, a small Node API, SQLite, viem, OpenZeppelin EIP712/ECDSA and one local EVM toolchain. Anvil/Forge were already available in the development environment and are the selected toolchain. The immutable contract fixes one generated publisher EOA, organisation, feed and series at deployment. Transport is a local HTTP API with automatic polling. These are MVP choices, not requirements attributed to the original problem statement. Real organisational onboarding, production networks, administration, revocation, offline distribution and Sullis/submission remain outside this implementation.
+The implementation assignments selected the existing React/TypeScript/Vite frontend, a small Node API, SQLite, viem, OpenZeppelin EIP712/ECDSA and Foundry (Anvil/Forge/Cast). The immutable contract fixes one explicitly configured publisher EOA, organisation, feed and series at deployment. Local initialization generates a test publisher; Sepolia uses the operator's chosen public publisher address. Transport is a loopback HTTP API with automatic polling. These are MVP choices, not requirements attributed to the original problem statement. Real organisational onboarding, production networks, administration, revocation, offline distribution and Sullis/submission remain outside this implementation.
 
 ## Run locally
 
@@ -43,6 +43,8 @@ npm run local:start
 
 Normal subsequent start is **`npm run local:start`**, which loads existing chain state and the existing database. It fails if deployment/chain state is absent or inconsistent, or the database file is missing; it does not redeploy or create an empty replacement database. Stop with Ctrl+C so Anvil saves its history. State is also saved every second; an abrupt process/OS failure can lose the latest unsaved chain state, which requires investigation rather than silently trusting database rows. The SQLite API can restart independently without losing messages.
 
+Foundry 1.5 snapshots can retain extra genesis headers from earlier starts. The local loader resolves the original header by the already trusted genesis hash in a temporary read-only probe, then loads all saved records with that header last and its original timestamp. This fixes ambiguous block-0 lookups without deleting history or changing deployment configuration. Full chain/contract checks still run before the API starts.
+
 | View/service | Local address |
 | --- | --- |
 | Existing simulated presentation | http://127.0.0.1:5175/ |
@@ -52,6 +54,70 @@ Normal subsequent start is **`npm run local:start`**, which loads existing chain
 | Anvil RPC | http://127.0.0.1:8545 |
 
 All listeners bind to `127.0.0.1`. Use that hostname consistently. To reuse an already running frontend from this checkout, use `npm run local:services` for just Anvil/API. Alternatively run `npm run local:chain`, `npm run local:api` and `npm run dev` in three terminals. Restart API by stopping/restarting only `local:api`; do not run duplicate servers. Stop and restart an older Vite process once if it was started before `vite.config.ts` existed.
+
+## Separate Sepolia profile
+
+| Profile | Frontend | API | Chain / storage |
+| --- | --- | --- | --- |
+| `local` | http://127.0.0.1:5175/publish · http://127.0.0.1:5175/inbox | http://127.0.0.1:3001/api/health | Anvil 31337 · `.local/` |
+| `sepolia` | http://127.0.0.1:5176/publish · http://127.0.0.1:5176/inbox | http://127.0.0.1:3002/api/health | Ethereum Sepolia L1 11155111 · `.sepolia/` |
+
+The profiles can run simultaneously. Only network/deployment configuration, data directories, ports and timing differ (`shared/profiles.ts`). Product changes belong in the existing shared modules, not a Sepolia copy or branch. The original presentation remains at http://127.0.0.1:5175/. No web hosting is involved; only the Sepolia contract is public. Port conflicts fail without stopping another process. A missing/invalid Sepolia deployment fails startup; there is no fallback to local, the presentation or another contract.
+
+Sepolia prerequisites: Foundry including `cast`, a funded **testnet-only deployer**, the chosen publisher's public EOA address, and an **HTTPS RPC intentionally suitable for public browser use**. The publisher also needs Sepolia test ETH for publishing. The deployer and publisher may be different addresses. This project neither buys nor bridges ETH and never inspects other wallets.
+
+Prepare the ignored project directory and edit the example:
+
+```sh
+mkdir -p .sepolia
+chmod 700 .sepolia
+cp config/sepolia.example.json .sepolia/settings.json
+npx playwright install chromium
+```
+
+Required `settings.json` fields:
+
+- `chainId`: exactly `11155111` (mainnet and arbitrary chain IDs are rejected).
+- `rpcUrl`: a public browser HTTPS endpoint. Credentials, query strings and fragments are rejected. Do not put a secret token in its path either. If only a secret server RPC is available, obtain a browser-suitable endpoint before proceeding; this app has no RPC proxy.
+- `rpcVisibility`: exactly `"public-browser"`, the operator's explicit acknowledgment that this URL is public. The software cannot determine whether an opaque path is a secret.
+- `publisher`: the public EOA authorized to publish this series on Sepolia.
+- `deployer`: the public address of the selected testnet deployment signer.
+
+The selected deployment signer uses a project-specific **encrypted V3 keystore**, `.sepolia/deployer`. In your own terminal, import only the intended testnet deployer using Cast's hidden prompts; never paste private keys, seeds or passwords into chat, Git or environment variables:
+
+```sh
+cast wallet import --interactive --keystore-dir .sepolia deployer
+chmod 600 .sepolia/deployer
+npm run sepolia:check
+```
+
+`sepolia:check` compiles the **same** CrisisRegistry, validates chain/genesis, publisher EOA, required RPC methods and actual browser fetches from origin `http://127.0.0.1:5176`. Server success alone is insufficient for CORS. Before first deployment it also checks keystore address/permissions, constructor arguments, gas estimate/fee cap and deployer balance. Missing evidence fails; no verifier checks are weakened for limited RPC providers. After deployment it rechecks the saved contract/context and deployment receipt. The pinned [Sepolia execution genesis](https://github.com/eth-clients/sepolia) is checked separately from chain ID.
+
+Review the public addresses, constructor identifiers, nonce and maximum estimated cost printed by preflight. **Deployment is a separate explicit action** in your own terminal:
+
+```sh
+npm run sepolia:deploy -- --broadcast
+```
+
+Without `--broadcast`, this command performs preflight only. Cast unlocks the project keystore with its hidden password prompt and signs the checked constructor transaction. The application runtime never opens this keystore, possesses the publisher key or signs database contents. The signed deployment bytes and hash are saved durably in `.sepolia/pending-deployment.json` **before broadcast**. On timeout, interruption or 429, keep the journal and rerun the same command. It queries/rebroadcasts only those exact bytes; it never chooses another nonce or creates a replacement deployment automatically. If the nonce was consumed but evidence is absent, it stops for investigation.
+
+Only a successful included receipt, matching transaction/contract address, compiled runtime code and immutable context produce `.sepolia/deployment.json` and the initial `.sepolia/demo.sqlite`. The script prints the actual contract address and transaction hash. It never overwrites an existing deployment. There is no usable Sepolia profile before this step succeeds.
+
+Normal start, alongside `local:start` in another terminal:
+
+```sh
+npm run sepolia:start
+```
+
+Normal start reads existing configuration/SQLite, checks the chain and starts only the loopback API/Vite servers. It never deploys, funds, creates a missing database or resets data. Ctrl+C stops these processes. `npm run build` checks TypeScript and builds the common app for both profiles into `dist/local` and `dist/sepolia`; these bundles contain no deployment configuration or keystore. For the low-level Vite CLI the explicit modes are `app-local` and `app-sepolia` because Vite reserves the name `local`.
+
+Vite serves a strictly validated public `/deployment.json` for its selected profile only. Both devservers deny file access to `.local`, `.local-backups`, `.sepolia`, `.git` and secret file types. `.env` files are not loaded by Vite. Deployment config stays outside SQLite and includes the RPC, EIP-712 domain, publisher/context, genesis, deployment block/hash, code hash and Sepolia deployment transaction hash. Do not add secrets or `VITE_` key material.
+
+The Sepolia wallet must select **chain ID 11155111** and the exact configured `publisher`. The app rechecks account/network immediately before both signature and transaction; it never selects Anvil's account or switches profiles based on the wallet. Kim only needs the configured browser RPC. Sepolia contract/confirmed transaction explorer links are inside **Visa kontrollunderlag**. Native extension permission/signature/transaction dialogs remain a manual check: open 5176 `/publish` with that wallet, publish version 1 and an update, and observe 5176 `/inbox` in a separate session without a wallet. Test providers are not evidence that these extension dialogs work.
+
+Both profiles require **one successful included transaction plus a matching registry/event/receipt**: this is chain confirmation, **not finality**. Public-network reorganizations remain possible and each subsequent check revalidates block-bound evidence. Sepolia polls 15 seconds after the preceding check completes (local: 2.5 seconds), with at most four concurrent packet checks and no automatic RPC retries. RPC timeout is 12 seconds and receipt wait is bounded at 45 seconds. A timeout/429/delayed receipt is an unknown outcome, not a failed transaction. The frozen package and transaction hash survive in the pending attempt; **Fortsätt publiceringen** resumes confirmation without a new signature, version or transaction. If the wallet's send outcome itself is unknown, retry checks the registry but refuses another send until evidence resolves it. The user can inspect the wallet's history; the app does not silently guess that nothing was sent.
+
+Browser cache/attempt keys bind chain ID, genesis, contract, deployment block hash and code hash. Existing local entries are read compatibly and reverified; no local data is deleted or migrated destructively. A packet copied between profiles is rejected even with the same publisher/text. Only `.local` supports the intentional coordinated reset below. Do not use a local reset to repair Sepolia, delete its deployment journal after an ambiguous send or replace trust configuration with database values. Future contract-source changes require a later, explicitly planned **new deployment**; normal app development/start/build cannot trigger it.
 
 ### Connect Alex's browser wallet
 
@@ -65,7 +131,7 @@ Browser automation uses a **test-only EIP-1193 device**, installed exclusively b
 
 ## Signed format, authority and persistence
 
-`shared/protocol.ts` strictly validates the common envelope. `bodyHash` is keccak256 over the exact UTF-8 text, with no trimming or Unicode normalization. Unpaired surrogate code units are rejected. The typed `Message` binds `bodyHash`, `sender`, `organisation`, `feed`, `messageId`, `version` (`uint32`) and `previousDigest`. Its EIP-712 domain is `CrisisMessage`, version `1`, chain ID 31337 and the deployed verifying contract. **`packageDigest` hashes the complete typed package; it is different from `bodyHash`.** [viem typed signing](https://viem.sh/docs/actions/wallet/signTypedData) and [OpenZeppelin EIP712/ECDSA](https://docs.openzeppelin.com/contracts/5.x/api/utils/cryptography) supply the cryptography; JSON is only a storage/transport encoding.
+`shared/protocol.ts` strictly validates the common envelope. `bodyHash` is keccak256 over the exact UTF-8 text, with no trimming or Unicode normalization. Unpaired surrogate code units are rejected. The typed `Message` binds `bodyHash`, `sender`, `organisation`, `feed`, `messageId`, `version` (`uint32`) and `previousDigest`. Its EIP-712 domain is `CrisisMessage`, version `1`, the selected chain ID (31337 or 11155111) and the deployed verifying contract. **`packageDigest` hashes the complete typed package; it is different from `bodyHash`.** [viem typed signing](https://viem.sh/docs/actions/wallet/signTypedData) and [OpenZeppelin EIP712/ECDSA](https://docs.openzeppelin.com/contracts/5.x/api/utils/cryptography) supply the cryptography; JSON is only a storage/transport encoding.
 
 `contracts/CrisisRegistry.sol` is non-upgradeable. Only the fixed EOA may send a publication transaction, and its EIP-712 signature must match. The constructor pins the organisation, feed and series ID; a new arbitrary ID cannot restart the sequence. Version 1 requires the zero predecessor, then every update must advance the head by exactly one and name its current digest. Records remain addressable by version. The contract receives only typed hashes and synthetic identifiers, never the message body, including in calldata/events.
 
@@ -131,10 +197,13 @@ npm run test:mvp
 npm run build
 npx playwright install chromium
 npm run test:browser
+npm run test:profiles
 git diff --check
 ```
 
 The existing 50 presentation/model tests are preserved. The MVP suite starts a separate temporary Anvil/SQLite/API environment and checks typed-digest parity, exact Unicode/text, metadata/domain/signature changes, unauthorized senders, fixed series, replay, concurrent predecessors, pending storage, cancellation, failed storage, reverted mined receipts, immutable/idempotent writes, direct database tampering/rollback/deletion, false reference confirmation, cache duplicates, late callbacks, missing evidence, RPC failure, and both backend and chain restart. Browser tests use separate publisher/recipient contexts, exercise real signatures and local transactions, automatic updates, reload/restart, all three database demonstrations, RPC interruption and the original presentation. Fixtures and browser surfaces are closed afterward. Screenshots are ignored under `output/playwright/`.
+
+`test:profiles` runs both profiles together using temporary Anvil instances, SQLite/API servers and browser origins. Its **test-only** Sepolia RPC facade emulates Sepolia's chain ID, genesis and HTTPS destination over loopback; this is not a public Sepolia deployment or CORS result. It covers cross-profile rejection, routing/cache/attempt isolation, pending receipt/429 recovery without duplicate publication, real Cast signing from a disposable encrypted keystore, deployment-journal resumption, bytecode checks, immutable context, changed control blocks, database tampering/rollback/deletion and unavailable evidence. A separate real browser/HTTP fixture checks that server RPC success with blocked CORS fails. Normal automated tests never call a public RPC, faucet or testnet. Only the explicit `sepolia:check`/`sepolia:deploy` commands exercise the configured public endpoint.
 
 ## Original presentation: present and reset
 

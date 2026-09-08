@@ -6,13 +6,13 @@ import { createServer } from "vite";
 import { fileURLToPath } from "node:url";
 import { environment, testDevice } from "./helpers.ts";
 import { demoAction } from "../scripts/demo.ts";
+import { profileViteConfig } from "../server/profile-config.ts";
 
 test("separate publisher/recipient browser contexts, real API/SQLite/EVM and presentation", { timeout: 120000 }, async t => {
   const env = await environment(); t.after(() => env.close());
   const root = fileURLToPath(new URL("../", import.meta.url));
-  const vite = await createServer({ configFile: false, root, server: { host: "127.0.0.1", port: env.frontendPort, strictPort: true,
-    fs: { deny: ["**/.local/**", "**/.local-backups/**", "*.key", "**/.git/**"] }, proxy: { "/api": { target: env.apiUrl, changeOrigin: true } } },
-    plugins: [{ name: "isolated-test-deployment", configureServer(server) { server.middlewares.use("/deployment.json", (_req, res) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(env.config)); }); } }] });
+  const vite = await createServer({ ...profileViteConfig("local", { readDeployment: async () => env.config,
+    frontendPort: env.frontendPort, apiPort: Number(new URL(env.apiUrl).port) }), configFile: false });
   await vite.listen(); t.after(() => vite.close());
   const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
   const publisherContext = await browser.newContext({ viewport: { width: 1000, height: 900 } });

@@ -1,14 +1,15 @@
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { EIP1193Provider } from "viem";
-import { configSchema, envelopeSchema, freezeDraft, unsignedSchema } from "../../shared/protocol.ts";
+import { freezeDraft, parseConfig } from "../../shared/protocol.ts";
 import type { TrustConfig } from "../../shared/protocol.ts";
 import { readSnapshot, rpcClient } from "../../shared/chain.ts";
 import type { ChainSnapshot } from "../../shared/chain.ts";
 import { cacheKey, emptyInbox, InboxVerifier } from "./inbox.ts";
 import type { CheckedMessage, InboxState } from "./inbox.ts";
-import { publishAttempt } from "./publish.ts";
+import { publishAttempt, restoreAttempt } from "./publish.ts";
 import type { Attempt, Stage } from "./publish.ts";
+import { activeProfile, readSaved, storageKey } from "./profile.ts";
 import "./live.css";
 
 declare global { interface Window { ethereum?: EIP1193Provider } }
@@ -17,6 +18,7 @@ function Details({ entry, config, snapshot }: { entry?: CheckedMessage; config: 
   return <details className="evidence"><summary>Visa kontrollunderlag</summary><dl>
     <dt>Behörig avsändare</dt><dd>{config.publisher}</dd>
     <dt>Kontrakt · nätverk</dt><dd>{config.domain.verifyingContract} · {config.domain.chainId}</dd>
+    {activeProfile.id === "sepolia" && <><dt>Sepolia-explorer</dt><dd><a href={`https://sepolia.etherscan.io/address/${config.domain.verifyingContract}`} target="_blank" rel="noreferrer">Kontrakt</a>{entry?.proof && <> · <a href={`https://sepolia.etherscan.io/tx/${entry.proof.txHash}`} target="_blank" rel="noreferrer">Publiceringstransaktion</a></>}</dd></>}
     {entry?.packet && <><dt>Innehållshash · exakt UTF-8-text</dt><dd>{entry.packet.message.bodyHash}</dd>
       <dt>Paketdigest · EIP-712</dt><dd>{entry.packet.packageDigest}</dd>
       <dt>Föregående paketdigest</dt><dd>{entry.packet.message.previousDigest}</dd></>}
@@ -41,13 +43,13 @@ function Inbox({ config }: { config: TrustConfig }) {
   const [state, setState] = useState<InboxState>(emptyInbox);
   useEffect(() => {
     let initial: unknown[] = [];
-    try { const value = JSON.parse(localStorage.getItem(cacheKey(config)) ?? "[]"); if (Array.isArray(value)) initial = value; } catch { /* re-fetch */ }
+    try { const value = JSON.parse(readSaved("inbox", config) ?? "[]"); if (Array.isArray(value)) initial = value; } catch { /* re-fetch */ }
     const verifier = new InboxVerifier(config, undefined, initial, packets => localStorage.setItem(cacheKey(config), JSON.stringify(packets)));
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       await verifier.refresh(next => { if (!disposed) setState(next); });
-      if (!disposed) timer = setTimeout(() => { void tick(); }, 2500);
+      if (!disposed) timer = setTimeout(() => { void tick(); }, activeProfile.pollInterval);
     };
     void tick();
     return () => { disposed = true; clearTimeout(timer); verifier.dispose(); };
@@ -77,15 +79,14 @@ function Publisher({ config }: { config: TrustConfig }) {
   const [error, setError] = useState("");
   const [published, setPublished] = useState<CheckedMessage>();
   const inFlight = useRef(false);
-  const attemptKey = `crisis-publish:${config.domain.verifyingContract}:${config.codeHash}`;
+  const attemptKey = storageKey("publish", config);
   useEffect(() => {
     let active = true;
     void readSnapshot(rpcClient(config), config).then(value => { if (active) setHead(value); }).catch(() => { if (active) setError("Nätverk eller kontrakt kunde inte kontrolleras."); });
     try {
-      const saved = JSON.parse(localStorage.getItem(attemptKey) ?? "null");
+      const saved = JSON.parse(readSaved("publish", config) ?? "null");
       if (saved) {
-        const restored: Attempt = { draft: unsignedSchema.parse(saved.draft), packet: saved.packet ? envelopeSchema.parse(saved.packet) : undefined };
-        if (typeof saved.txHash === "string" && /^0x[0-9a-fA-F]{64}$/.test(saved.txHash)) restored.txHash = saved.txHash;
+        const restored = restoreAttempt(saved, config);
         setAttempt(restored); setBody(restored.draft.body);
       }
     } catch { setError("Det sparade utkastet kunde inte läsas. Granska texten på nytt."); }
@@ -95,7 +96,7 @@ function Publisher({ config }: { config: TrustConfig }) {
     setAttempt({ ...value });
     try { localStorage.setItem(attemptKey, JSON.stringify(value)); } catch { /* same-session retry remains available */ }
   };
-  const clearAttempt = () => { try { localStorage.removeItem(attemptKey); } catch { /* same-session state still clears */ } };
+  const clearAttempt = () => { try { localStorage.setItem(attemptKey, "null"); } catch { /* tombstone prevents restoring the retained legacy attempt */ } };
   const review = async () => {
     if (inFlight.current) return; inFlight.current = true; setBusy(true); setError(""); setPublished(undefined); setStage(undefined);
     try {
@@ -118,7 +119,7 @@ function Publisher({ config }: { config: TrustConfig }) {
       const message = cause instanceof Error ? cause.message : "";
       setError(code === 4001 || /rejected|denied/i.test(message) ? "Walletdialogen avbröts. Publiceringen är inte färdig. Du kan försöka igen med samma paket." :
         /wallet|konto|nätverk|version|Lagring|lagring|Transaktion|publiceringspost|Serien|Granska/i.test(message) && message.length < 250 ? message :
-          "Publiceringen kunde inte slutföras. Kontrollera wallet, API och lokalt nät. Försök igen med samma paket.");
+          `Bekräftelsen kunde inte slutföras. Kontrollera wallet, API och ${activeProfile.label}. Ett skickat paket behålls; fortsätt för att kontrollera utfallet.`);
     } finally { inFlight.current = false; setBusy(false); }
   };
   return <>
@@ -129,7 +130,7 @@ function Publisher({ config }: { config: TrustConfig }) {
         <><label htmlFor="message-text">Meddelande</label><textarea id="message-text" value={body} maxLength={4000} disabled={busy} onChange={event => setBody(event.target.value)} rows={6} /><p className="character-count">{body.length} / 4 000</p></>}
       <div className="actions">{attempt ? <>
         <button className="primary" disabled={busy} onClick={() => { void send(); }}>{attempt.packet ? "Fortsätt publiceringen" : "Signera och publicera"}<span aria-hidden="true">↗</span></button>
-        <button className="secondary" disabled={busy || !!attempt.txHash} onClick={() => { setAttempt(undefined); setStage(undefined); setError(""); clearAttempt(); }}>Redigera texten</button>
+        <button className="secondary" disabled={busy || !!attempt.txHash || attempt.transactionRequested} onClick={() => { setAttempt(undefined); setStage(undefined); setError(""); clearAttempt(); }}>Redigera texten</button>
       </> : <button className="primary" disabled={busy || !body.length} onClick={() => { void review(); }}>{busy ? "Förbereder…" : "Granska meddelandet"}<span aria-hidden="true">→</span></button>}</div>
       {stage && <p className={`notice ${stage === "complete" ? "success" : ""}`} role="status">{stageLabels[stage]}{stage === "complete" && published?.packet ? ` · Version ${published.packet.message.version}` : ""}</p>}
       {error && <p className="notice warning" role="alert">{error}</p>}
@@ -145,13 +146,13 @@ function App() {
     document.title = location.pathname === "/publish" ? "Publicera · Krismeddelanden" : "Övning Norr · Krismeddelanden";
     const controller = new AbortController();
     void fetch("/deployment.json", { cache: "no-store", signal: controller.signal }).then(async response => {
-      if (!response.ok) throw new Error(); return configSchema.parse(await response.json());
-    }).then(setConfig).catch(() => { if (!controller.signal.aborted) setError("Lokal deploymentkonfiguration saknas eller är ogiltig. Kör projektets local:init och starta tjänsterna."); });
+      if (!response.ok) throw new Error(); return parseConfig(await response.json(), activeProfile.id);
+    }).then(setConfig).catch(() => { if (!controller.signal.aborted) setError(`Deploymentkonfiguration för ${activeProfile.label} saknas eller är ogiltig. Kontrollera ${activeProfile.id === "local" ? "local:init" : "sepolia:check"} före uppstart.`); });
     return () => controller.abort();
   }, []);
   const publisher = location.pathname === "/publish";
   return <main className={`live-app ${publisher ? "publisher" : "inbox"}`}>
-    <nav className="topline"><a className="wordmark" href={publisher ? "/publish" : "/inbox"}>Krismeddelanden<span aria-hidden="true">↗</span></a><span>Lokalt EVM-nät · Demoorganisation</span></nav>
+    <nav className="topline"><a className="wordmark" href={publisher ? "/publish" : "/inbox"}>Krismeddelanden<span aria-hidden="true">↗</span></a><span>{activeProfile.label} · Demoorganisation</span></nav>
     {config ? publisher ? <Publisher config={config} /> : <Inbox config={config} /> : <p className="notice" role="status">{error || "Läser lokal tillitskonfiguration…"}</p>}
   </main>;
 }

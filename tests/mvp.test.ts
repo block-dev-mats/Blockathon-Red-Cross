@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { zeroHash, keccak256, toBytes } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { abi, bodyHash, freezeDraft, packageDigest, typedData, verifyEnvelope } from "../shared/protocol.ts";
@@ -179,6 +179,15 @@ test("real contract, SQLite, publication and independent recipient verification"
     await assert.rejects(startApi(config, `${env.root}/missing.sqlite`, 0));
     await env.restartApi(); assert.equal((await env.receive()).length, 2);
     const before = await readSnapshot(client, config);
+    await env.stopChain();
+    // Reproduce Foundry snapshots containing an extra genesis from a later
+    // startup. It must not replace the original number-0 identity on reload.
+    const savedState = JSON.parse(await readFile(env.statePath, "utf8"));
+    const genesis = savedState.blocks.find((b: { header: { number: string } }) => b.header.number === "0x0");
+    savedState.blocks.push({ ...genesis, header: { ...genesis.header, timestamp: `0x${(BigInt(genesis.header.timestamp) + 3600n).toString(16)}` } });
+    await writeFile(env.statePath, JSON.stringify(savedState));
+    await env.restartChain();
+    assert.equal((await client.getBlock({ blockNumber: 0n })).hash, config.genesisHash);
     await env.restartChain();
     const after = await readSnapshot(client, config);
     assert.equal(after.digest, before.digest); assert.equal(after.blockNumber, before.blockNumber);

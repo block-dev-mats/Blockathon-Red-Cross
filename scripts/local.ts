@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Hex } from "viem";
-import { configSchema } from "../shared/protocol.ts";
+import { parseConfig } from "../shared/protocol.ts";
 import { launchAnvil, deploy } from "./evm.ts";
 import { startApi } from "../server/api.ts";
 import { readSnapshot, rpcClient } from "../shared/chain.ts";
@@ -14,7 +14,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 export const localPath = `${root}.local`;
 const statePath = `${localPath}/chain.json`;
 const configPath = `${localPath}/deployment.json`;
-export async function loadConfig() { return configSchema.parse(JSON.parse(await readFile(configPath, "utf8"))); }
+export async function loadConfig() { return parseConfig(JSON.parse(await readFile(configPath, "utf8")), "local"); }
 async function exists(path: string) { try { await access(path); return true; } catch { return false; } }
 async function portOpen(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -64,7 +64,7 @@ async function main() {
   if (!["chain", "start", "services"].includes(command)) throw new Error("Använd init, chain, api, start, services eller reset.");
   await access(statePath); // Never silently recreate a missing chain on normal startup.
   await freePorts(command === "start" ? [8545, 3001, 5175] : command === "services" ? [8545, 3001] : [8545]);
-  const network = await launchAnvil(8545, statePath);
+  const network = await launchAnvil(8545, statePath, 31337, config.genesisHash);
   let api: Awaited<ReturnType<typeof startApi>> | undefined;
   let frontend: ReturnType<typeof spawn> | undefined;
   let stopping = false;
@@ -80,7 +80,7 @@ async function main() {
       console.log("SQLite/API: http://127.0.0.1:3001");
     }
     if (command === "start") {
-      frontend = spawn(process.execPath, [`${root}node_modules/vite/bin/vite.js`, "--host", "127.0.0.1", "--port", "5175", "--strictPort"], { cwd: root, stdio: "inherit" });
+      frontend = spawn(process.execPath, [`${root}node_modules/vite/bin/vite.js`, "--mode", "app-local", "--host", "127.0.0.1", "--port", "5175", "--strictPort"], { cwd: root, stdio: "inherit" });
       frontend.once("exit", () => { void stop(); });
     }
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void stop().then(() => process.exit(0)); });

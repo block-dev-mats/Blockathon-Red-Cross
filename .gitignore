@@ -15,6 +15,7 @@ output/
 # Local chain, deployment trust, generated wallets and synthetic SQLite data.
 .local/
 .local-backups/
+.sepolia/
 artifacts/
 cache/
 test-results/

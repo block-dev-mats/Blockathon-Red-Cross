@@ -1,7 +1,8 @@
-import { verifyEnvelope } from "../../shared/protocol.ts";
+import { deploymentIdentity, verifyEnvelope } from "../../shared/protocol.ts";
 import type { Envelope, TrustConfig } from "../../shared/protocol.ts";
 import { assertSnapshot, publicationProof, readSnapshot, rpcClient, VerificationMismatch } from "../../shared/chain.ts";
 import type { ChainSnapshot, PublicationProof } from "../../shared/chain.ts";
+import { profileForChain } from "../../shared/profiles.ts";
 
 export type CheckedMessage = {
   packet?: Envelope; body: string; signature: "passed" | "failed";
@@ -13,8 +14,8 @@ export type InboxState = {
   lastSuccess?: string; chainError?: string; deliveryError?: string; missingHead: boolean;
 };
 export const emptyInbox: InboxState = { checking: true, entries: [], missingHead: false };
-export async function fetchDeliveries(): Promise<unknown[]> {
-  const response = await fetch("/api/messages", { cache: "no-store", signal: AbortSignal.timeout(4500) });
+export async function fetchDeliveries(timeout = 4500): Promise<unknown[]> {
+  const response = await fetch("/api/messages", { cache: "no-store", signal: AbortSignal.timeout(timeout) });
   if (!response.ok) throw new Error("Meddelandetjänsten svarar inte.");
   const text = await response.text();
   if (text.length > 4_000_000) throw new Error("Leveransen är för stor.");
@@ -22,7 +23,7 @@ export async function fetchDeliveries(): Promise<unknown[]> {
   if (!data || !Array.isArray(data.deliveries) || data.deliveries.length > 1000) throw new Error("Ogiltigt leveransformat.");
   return data.deliveries.map((item: unknown) => item && typeof item === "object" && "packet" in item ? item.packet : item);
 }
-export const cacheKey = (config: TrustConfig) => `crisis-inbox:${config.domain.verifyingContract}:${config.codeHash}`;
+export const cacheKey = (config: TrustConfig) => `crisis-inbox:${deploymentIdentity(config)}`;
 
 // A generation identifies this exact fetch/check operation. No result is keyed by a
 // database ID or a claimed digest. Every fetched and cached packet is revalidated.
@@ -31,7 +32,7 @@ export class InboxVerifier {
   private accepted: unknown[];
   private state: InboxState = emptyInbox;
   readonly client;
-  constructor(readonly config: TrustConfig, readonly receive = fetchDeliveries, initialCache: unknown[] = [],
+  constructor(readonly config: TrustConfig, readonly receive = () => fetchDeliveries(profileForChain(config.domain.chainId).apiTimeout), initialCache: unknown[] = [],
     readonly save: (packets: Envelope[]) => void = () => {}) {
     this.accepted = initialCache.slice(0, 1000);
     this.client = rpcClient(config);
@@ -69,8 +70,19 @@ export class InboxVerifier {
     // an approval cache: each distinct actual payload is checked again below.
     const rawBytes = new Set<string>();
     const distinct = fetched.filter(raw => { const bytes = JSON.stringify(raw); if (rawBytes.has(bytes)) return false; rawBytes.add(bytes); return true; });
-    const received = await Promise.all(distinct.map(raw => check(raw, false)));
-    const cached = await Promise.all(this.accepted.map(raw => check(raw, true)));
+    // Bound RPC pressure on public endpoints. A new poll starts only after this
+    // one settles; abandoned generations stop scheduling further packet checks.
+    const checkBatch = async (packets: unknown[], fromCache: boolean) => {
+      const results: CheckedMessage[] = []; let next = 0;
+      await Promise.all(Array.from({ length: Math.min(4, packets.length) }, async () => {
+        while (next < packets.length && generation === this.generation) {
+          const index = next++; results[index] = await check(packets[index], fromCache);
+        }
+      }));
+      return results;
+    };
+    const received = await checkBatch(distinct, false);
+    const cached = await checkBatch(this.accepted, true);
     if (snapshot) {
       try { await assertSnapshot(this.client, snapshot); }
       catch { snapshot = undefined; }

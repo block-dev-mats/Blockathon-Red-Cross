@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 5175 --strictPort",
-    "build": "tsc --noEmit && vite build",
+    "dev": "vite --mode app-local --host 127.0.0.1 --port 5175 --strictPort",
+    "build": "tsc --noEmit && vite build --mode app-local && vite build --mode app-sepolia",
     "test": "node --import tsx --test src/*.test.ts",
-    "preview": "vite preview --host 127.0.0.1 --port 5175 --strictPort",
+    "preview": "vite preview --mode app-local --host 127.0.0.1 --port 5175 --strictPort",
     "contract:build": "forge build",
     "local:init": "npm run contract:build && node --import tsx scripts/local.ts init",
     "local:start": "node --import tsx scripts/local.ts start",
@@ -18,7 +18,11 @@
     "demo": "node --import tsx scripts/demo.ts",
     "test:mvp": "npm run contract:build && node --import tsx --test tests/mvp.test.ts",
     "test:browser": "node --import tsx --test tests/browser.test.ts",
-    "check": "npm test && npm run test:mvp && npm run build"
+    "check": "npm test && npm run test:mvp && npm run test:profiles && npm run build",
+    "sepolia:check": "npm run contract:build && node --import tsx scripts/sepolia.ts check",
+    "sepolia:deploy": "npm run contract:build && node --import tsx scripts/sepolia.ts deploy",
+    "sepolia:start": "node --import tsx scripts/runtime.ts sepolia",
+    "test:profiles": "node --import tsx --test tests/profiles.test.ts"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.6.1",

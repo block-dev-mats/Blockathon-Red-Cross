@@ -6,6 +6,7 @@ import { hex32, verifyEnvelope } from "../shared/protocol.ts";
 import type { TrustConfig } from "../shared/protocol.ts";
 import { assertSnapshot, publicationProof, readSnapshot, rpcClient } from "../shared/chain.ts";
 import { MessageStore } from "./storage.ts";
+import { profileForChain } from "../shared/profiles.ts";
 
 async function input(req: IncomingMessage): Promise<unknown> {
   if (req.headers["content-type"] !== "application/json") throw new Error("JSON krävs.");
@@ -18,7 +19,7 @@ async function input(req: IncomingMessage): Promise<unknown> {
   }
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
 }
-export async function startApi(config: TrustConfig, dbPath: string, port = 3001, origin = "http://127.0.0.1:5175") {
+export async function startApi(config: TrustConfig, dbPath: string, port: number = profileForChain(config.domain.chainId).apiPort, origin = `http://127.0.0.1:${profileForChain(config.domain.chainId).frontendPort}`) {
   await access(dbPath); // Only explicit initialization may create a database.
   const client = rpcClient(config);
   await readSnapshot(client, config); // Fail closed before accepting traffic.
@@ -34,7 +35,7 @@ export async function startApi(config: TrustConfig, dbPath: string, port = 3001,
     }
     try {
       if (req.method === "GET" && req.url === "/api/messages") { reply(200, { deliveries: store.list() }); return; }
-      if (req.method === "GET" && req.url === "/api/health") { reply(200, { service: "crisis-local-api" }); return; }
+      if (req.method === "GET" && req.url === "/api/health") { reply(200, { service: "crisis-local-api", profile: profileForChain(config.domain.chainId).id }); return; }
       if (req.method === "POST" && req.url === "/api/messages") {
         const packet = await verifyEnvelope(await input(req), config);
         const snapshot = await readSnapshot(client, config);
@@ -62,7 +63,7 @@ export async function startApi(config: TrustConfig, dbPath: string, port = 3001,
       reply(400, { error: error instanceof z.ZodError ? "Ogiltigt meddelandeformat." : "Åtgärden kunde inte bekräftas. Kontrollera lagring, paket och kedjestatus." });
     }
   });
-  server.requestTimeout = 10000;
+  server.requestTimeout = profileForChain(config.domain.chainId).apiTimeout;
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
   return { server, store, close: () => new Promise<void>((resolve, reject) => server.close(e => { store.close(); e ? reject(e) : resolve(); })) };
 }

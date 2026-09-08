@@ -1,0 +1,7 @@
+{
+  "chainId": 11155111,
+  "rpcUrl": "https://YOUR-PUBLIC-BROWSER-RPC",
+  "rpcVisibility": "public-browser",
+  "publisher": "",
+  "deployer": ""
+}
