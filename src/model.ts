@@ -24,12 +24,12 @@ export type StatusEvidence = Readonly<{
   current: boolean;
   entries: Readonly<Record<string, "current" | "replaced" | "revoked">>;
 }>;
-export type Verification = {
+export type Verification = Readonly<{
   integrity: "intact" | "changed" | "unavailable";
   authority: "authorized" | "unauthorized" | "unavailable";
   status: "current" | "replaced" | "revoked" | "unknown";
   original?: Packet;
-};
+}>;
 
 export function publish(
   registry: Registry,
@@ -93,11 +93,11 @@ export function verify(
 ): Verification {
   const original = registry.find((p) => p.reference === packet.reference);
   if (!original)
-    return {
+    return Object.freeze({
       integrity: "unavailable",
       authority: "unavailable",
       status: "unknown",
-    };
+    });
   const fields = [
     "id",
     "version",
@@ -123,7 +123,7 @@ export function verify(
     integrity === "intact" && authority === "authorized" && evidence?.current
       ? (evidence.entries[packet.reference] ?? "unknown")
       : "unknown";
-  return { integrity, authority, status, original };
+  return Object.freeze({ integrity, authority, status, original });
 }
 
 // Minimal changed span works for arbitrary Unicode text, additions and deletions.

@@ -5,6 +5,7 @@ import type { Packet } from "./model.ts";
 import { currentOfficial, initial, reducer } from "./simulation.ts";
 import type { Receipt, Scenario } from "./simulation.ts";
 import { VerificationDetails } from "./VerificationDetails.tsx";
+import { StoragePanel } from "./StoragePanel.tsx";
 import "./styles.css";
 
 const scenarios: { id: Scenario; name: string }[] = [
@@ -12,8 +13,19 @@ const scenarios: { id: Scenario; name: string }[] = [
   { id: "forwarding", name: "Vidarebefordran" },
   { id: "update", name: "Uppdatering" },
   { id: "offline", name: "Utan uppkoppling" },
+  { id: "database", name: "Databasmanipulation" },
 ];
 const notes: Record<string, string> = {
+  "storage-ready":
+    "”Simulera ny hämtning” representerar nästa läsning från meddelandetjänsten; databasändringar når inte Kim förrän dess.",
+  "storage-saved":
+    "Bara lagringens text ändras; publiceringsunderlaget och Kims redan kontrollerade paket ligger kvar oförändrade.",
+  "storage-deleted":
+    "Posten är borttagen ur lagringen; nästa hämtning kan misslyckas även när publiceringsbeviset finns kvar.",
+  "storage-fetching":
+    "Lagringssvaret fryses för den här hämtningen; senare databasändringar påverkar först nästa läsning.",
+  "storage-missing":
+    "Ett publiceringsbevis kan styrka ett paket, men varken signatur eller hash återskapar en raderad meddelandetext.",
   ready:
     "Kim prenumererar på Övning Norr; publicering skickar paketet direkt via en meddelandetjänst utanför kedjan.",
   published:
@@ -110,6 +122,7 @@ function Meta({ packet }: { packet: Packet }) {
 function Message({ receipt, current }: { receipt: Receipt; current: boolean }) {
   const { packet, result, checking: pending } = receipt;
   const isCopy = receipt.route === "forwarded";
+  const isStorage = receipt.route === "storage";
   const changed = result?.integrity === "changed";
   const unavailable =
     !result ||
@@ -125,7 +138,9 @@ function Message({ receipt, current }: { receipt: Receipt; current: boolean }) {
     : unavailable
       ? "Kan inte verifieras"
       : changed
-        ? "Ändrat innehåll"
+        ? isStorage
+          ? "Hämtat innehåll matchar inte publiceringen"
+          : "Ändrat innehåll"
         : result?.authority === "unauthorized"
           ? "Avsändaren saknar behörighet"
           : result?.status === "revoked"
@@ -147,14 +162,17 @@ function Message({ receipt, current }: { receipt: Receipt; current: boolean }) {
         : "success";
   return (
     <article
-      className={`message received ${replaced ? "replaced" : ""} ${isCopy ? "received-copy" : ""}`}
+      className={`message received ${replaced ? "replaced" : ""} ${isCopy || isStorage ? "received-copy" : ""}`}
       data-receipt-id={receipt.id}
       data-route={receipt.route}
     >
       {isCopy && <p className="copy-title">Mottagen kopia</p>}
+      {isStorage && <p className="copy-title">Ny hämtning</p>}
       <Meta packet={packet} />
       <p className="message-text">
-        {diff ? (
+        {isStorage && changed ? (
+          <mark>{packet.text || "(Tom text)"}</mark>
+        ) : diff ? (
           <>
             {diff.prefix}
             {diff.removed && (
@@ -200,6 +218,11 @@ function App() {
   const [state, dispatch] = useReducer(reducer, undefined, () => initial());
   const latest = state.registry.at(-1);
   const showCopy = state.scenario === "forwarding";
+  const showStorage = state.scenario === "database";
+  const fetched =
+    state.fetchOutcome?.status === "received"
+      ? state.receipts.find((r) => r.id === state.fetchOutcome?.id)
+      : undefined;
   const official = state.receipts.filter((r) => r.route === "official");
   const lastCopy = [...state.receipts]
     .reverse()
@@ -272,9 +295,20 @@ function App() {
             {state.online ? "Koppla från volontären" : "Återanslut volontären"}
           </button>
         )}
+        {showStorage && (
+          <button
+            className="connection"
+            onClick={() => dispatch({ type: "storage-fetch" })}
+            disabled={!state.online}
+          >
+            Simulera ny hämtning
+          </button>
+        )}
       </div>
 
-      <div className={`scene ${showCopy ? "with-copy" : "direct"}`}>
+      <div
+        className={`scene ${showCopy || showStorage ? "with-copy" : "direct"} ${showStorage ? "database-scene" : ""}`}
+      >
         <section className="stage" aria-labelledby="coordinator-title">
           <div className="stage-heading">
             <div>
@@ -406,6 +440,7 @@ function App() {
           </section>
         )}
 
+        {showStorage && <StoragePanel state={state} dispatch={dispatch} />}
         <section className="stage" aria-labelledby="volunteer-title">
           <div className="stage-heading">
             <div>
@@ -448,15 +483,24 @@ function App() {
                 />
               ))}
               {lastCopy && <Message receipt={lastCopy} current={false} />}
-              {!state.receipts.length && !hasDelivery && (
-                <div className="empty">
-                  <span className="empty-icon">
-                    <Icon kind="send" />
-                  </span>
-                  <strong>Inget meddelande ännu</strong>
-                  <p>Nästa publicering kommer hit automatiskt.</p>
-                </div>
+              {fetched && <Message receipt={fetched} current={false} />}
+              {state.fetchOutcome?.status === "missing" && (
+                <p className="fetch-error" role="status">
+                  <Icon kind="warning" />
+                  Meddelandet kunde inte hämtas
+                </p>
               )}
+              {!state.receipts.length &&
+                !hasDelivery &&
+                !state.fetchOutcome && (
+                  <div className="empty">
+                    <span className="empty-icon">
+                      <Icon kind="send" />
+                    </span>
+                    <strong>Inget meddelande ännu</strong>
+                    <p>Nästa publicering kommer hit automatiskt.</p>
+                  </div>
+                )}
             </div>
           </div>
         </section>

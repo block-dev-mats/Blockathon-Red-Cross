@@ -13,19 +13,32 @@ import type {
   Verification,
 } from "./model.ts";
 
-export type Scenario = "publication" | "forwarding" | "update" | "offline";
+export type Scenario =
+  | "publication"
+  | "forwarding"
+  | "update"
+  | "offline"
+  | "database";
+// Untrusted storage metadata is carried along, but never passed to verify().
+export type StoredMessage = Readonly<{ packet: Packet; verified: boolean }>;
 export type Delivery = Readonly<{
   id: number;
-  route: "official" | "forwarded";
-  packet: Packet;
+  route: "official" | "forwarded" | "storage";
+  packet: Packet | null;
+  storageVerified?: boolean;
 }>;
-export type Receipt = Delivery & {
+export type Receipt = Omit<Delivery, "packet"> & {
+  packet: Packet;
   result: Verification | null;
   checking: boolean;
 };
 export type State = {
   scenario: Scenario;
   registry: Registry;
+  storage: Readonly<Record<string, StoredMessage>>;
+  storageReference: string | null;
+  storageDraft: string;
+  fetchOutcome: Readonly<{ id: number; status: "missing" | "received" }> | null;
   localRegistry: Registry;
   subscription: string;
   draft: string;
@@ -45,15 +58,30 @@ export type State = {
 };
 export type Action =
   | { type: "prepare"; scenario: Scenario }
-  | { type: "reset" | "publish" | "forward" | "connection" }
-  | { type: "draft" | "copy"; text: string }
+  | {
+      type:
+        | "reset"
+        | "publish"
+        | "forward"
+        | "connection"
+        | "storage-save"
+        | "storage-delete"
+        | "storage-fetch";
+    }
+  | { type: "draft" | "copy" | "storage-draft"; text: string }
   | { type: "delivered" | "checked"; generation: number; revision: number };
 
-function queue(state: State, packet: Packet, route: Delivery["route"]): State {
+function queue(
+  state: State,
+  packet: Packet | null,
+  route: Delivery["route"],
+  storageVerified?: boolean,
+): State {
   const delivery = Object.freeze({
     id: state.nextReceiptId,
     route,
-    packet: Object.freeze({ ...packet }),
+    packet: packet ? Object.freeze({ ...packet }) : null,
+    ...(storageVerified === undefined ? {} : { storageVerified }),
   });
   return {
     ...state,
@@ -70,6 +98,10 @@ export function initial(
   const state: State = {
     scenario,
     registry: [],
+    storage: {},
+    storageReference: null,
+    storageDraft: ORIGINAL,
+    fetchOutcome: null,
     localRegistry: [],
     subscription: CONTEXT,
     draft: ORIGINAL,
@@ -93,9 +125,17 @@ export function initial(
   return {
     ...state,
     registry,
+    storage: Object.freeze({
+      [packet.reference]: Object.freeze({
+        packet: Object.freeze({ ...packet }),
+        verified: true,
+      }),
+    }),
+    storageReference: packet.reference,
     localRegistry: registry,
     copy: { ...packet },
-    draft: scenario === "forwarding" ? ORIGINAL : UPDATED,
+    draft:
+      scenario === "forwarding" || scenario === "database" ? ORIGINAL : UPDATED,
     evidence,
     lastCheckedAt: evidence.checkedAt,
     receipts: [
@@ -109,11 +149,13 @@ export function initial(
     ],
     nextReceiptId: 2,
     event:
-      scenario === "forwarding"
-        ? "copy-ready"
-        : scenario === "offline"
-          ? "connection-ready"
-          : "update-ready",
+      scenario === "database"
+        ? "storage-ready"
+        : scenario === "forwarding"
+          ? "copy-ready"
+          : scenario === "offline"
+            ? "connection-ready"
+            : "update-ready",
   };
 }
 
@@ -138,6 +180,45 @@ export function reducer(state: State, action: Action): State {
   if (action.type === "reset")
     return initial(state.scenario, state.generation + 1);
   if (action.type === "draft") return { ...state, draft: action.text };
+  if (action.type === "storage-draft")
+    return { ...state, storageDraft: action.text };
+  if (action.type === "storage-save" && state.storageReference) {
+    const row = state.storage[state.storageReference];
+    if (!row) return state;
+    return {
+      ...state,
+      storage: Object.freeze({
+        ...state.storage,
+        [state.storageReference]: Object.freeze({
+          ...row,
+          packet: Object.freeze({ ...row.packet, text: state.storageDraft }),
+        }),
+      }),
+      event: "storage-saved",
+    };
+  }
+  if (action.type === "storage-delete" && state.storageReference) {
+    const storage = { ...state.storage };
+    delete storage[state.storageReference];
+    return {
+      ...state,
+      storage: Object.freeze(storage),
+      event: "storage-deleted",
+    };
+  }
+  if (
+    action.type === "storage-fetch" &&
+    state.online &&
+    state.storageReference
+  ) {
+    const row = state.storage[state.storageReference];
+    return queue(
+      { ...state, event: "storage-fetching" },
+      row?.packet ?? null,
+      "storage",
+      row?.verified,
+    );
+  }
   if (action.type === "copy" && state.copy) {
     // Only the unsent editor changes. In-flight and received snapshots survive.
     return {
@@ -159,6 +240,14 @@ export function reducer(state: State, action: Action): State {
     const next = {
       ...state,
       registry,
+      storage: Object.freeze({
+        ...state.storage,
+        [packet.reference]: Object.freeze({
+          packet: Object.freeze({ ...packet }),
+          verified: true,
+        }),
+      }),
+      storageReference: state.storageReference ?? packet.reference,
       copy: { ...packet },
       event: state.online ? "published" : "published-offline",
     };
@@ -189,6 +278,9 @@ export function reducer(state: State, action: Action): State {
     const time = `${String(Math.floor(total / 60) % 24).padStart(2, "0")}.${String(total % 60).padStart(2, "0")}`;
     const localRegistry = state.registry;
     const evidence = statusEvidence(localRegistry, time);
+    const fetched = [...state.deliveries]
+      .reverse()
+      .find((d) => d.route === "storage" || d.packet === null);
     return {
       ...state,
       localRegistry,
@@ -196,18 +288,27 @@ export function reducer(state: State, action: Action): State {
       minute,
       deliveries: [],
       syncRequested: false,
+      fetchOutcome: fetched
+        ? {
+            id: fetched.id,
+            status: fetched.packet === null ? "missing" : "received",
+          }
+        : state.fetchOutcome,
       receipts: [
         ...state.receipts.map((r) =>
           state.syncRequested ? { ...r, checking: true } : r,
         ),
-        ...state.deliveries.map((d) => ({
-          ...d,
-          result: null,
-          checking: true,
-        })),
+        ...state.deliveries
+          .filter((d) => d.packet !== null)
+          .map((d) => ({
+            ...d,
+            packet: d.packet!,
+            result: null,
+            checking: true,
+          })),
       ],
       checkRevision: state.checkRevision + 1,
-      event: "received",
+      event: fetched?.packet === null ? "storage-missing" : "received",
     };
   }
   if (action.type === "checked") {
@@ -252,7 +353,9 @@ export function reducer(state: State, action: Action): State {
       receipts: state.receipts.map((r) => ({
         ...r,
         checking: false,
-        result: r.result ? { ...r.result, status: "unknown" } : null,
+        result: r.result
+          ? Object.freeze({ ...r.result, status: "unknown" as const })
+          : null,
       })),
       event: state.online ? "offline" : "reconnected",
     };
@@ -264,14 +367,17 @@ export function reducer(state: State, action: Action): State {
         );
         const alreadyQueued = next.deliveries.some(
           (d) =>
-            d.route === "official" && d.packet.reference === packet.reference,
+            d.route === "official" && d.packet?.reference === packet.reference,
         );
         if (
           packet.context === next.subscription &&
           !alreadyReceived &&
           !alreadyQueued
-        )
-          next = queue(next, packet, "official");
+        ) {
+          // The trusted register discovers versions; content comes only from storage.
+          const row = next.storage[packet.reference];
+          next = queue(next, row?.packet ?? null, "official", row?.verified);
+        }
       }
     }
     return next;

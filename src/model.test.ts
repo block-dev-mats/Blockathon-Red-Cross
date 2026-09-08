@@ -174,7 +174,7 @@ test("direct publication separates delivery from approval and preserves exact wh
   assert.equal(state.receipts.length, 0);
   assert.equal(currentOfficial(state), undefined);
   assert.equal(state.localRegistry.length, 0);
-  assert.equal(state.deliveries[0].packet.text, "  Samling\n14.00.  ");
+  assert.equal(state.deliveries[0].packet?.text, "  Samling\n14.00.  ");
   state = deliver(state);
   assert.equal(state.receipts.length, 1);
   assert.equal(state.receipts[0].result, null);
@@ -282,7 +282,7 @@ test("failed or unavailable official update never becomes the current official v
       ...state,
       deliveries: state.deliveries.map((d) => ({
         ...d,
-        packet: Object.freeze({ ...d.packet, ...change }),
+        packet: d.packet ? Object.freeze({ ...d.packet, ...change }) : null,
       })),
     };
     state = deliver(state);

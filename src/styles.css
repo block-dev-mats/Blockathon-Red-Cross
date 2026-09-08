@@ -142,6 +142,98 @@ main {
 .with-copy .received-copy {
   padding: 13px;
 }
+.storage-editor {
+  padding: 18px;
+  background: #eaece7;
+  border: 1px solid #cfd5c9;
+  border-radius: 12px;
+}
+.storage-editor label {
+  display: block;
+  margin-bottom: 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.storage-editor textarea {
+  min-height: 106px;
+  font-size: 16px;
+}
+.storage-metadata {
+  margin: 14px 0;
+  font-size: 11px;
+}
+.storage-metadata > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 6px 0;
+}
+.storage-metadata dt {
+  color: #65715e;
+}
+.storage-metadata dd {
+  margin: 0;
+  color: #3c4838;
+}
+.storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.storage-actions .primary {
+  margin: 0;
+  min-height: 38px;
+  padding: 8px;
+  flex: 1 1 155px;
+}
+.delete-row {
+  background: transparent;
+  border: 1px solid #c7cdbf;
+  color: #785139;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  min-height: 38px;
+  flex: 1 1 95px;
+}
+.publication-evidence {
+  margin-top: 22px;
+  padding: 17px 18px;
+  background: #fafbf7;
+  border-left: 3px solid #94a17f;
+}
+.publication-evidence .eyebrow {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+.publication-evidence h3 {
+  font-size: 13px;
+  margin: 7px 0;
+  font-weight: 600;
+}
+.publication-evidence p {
+  font-size: 12px;
+  margin: 8px 0;
+}
+.publication-evidence code {
+  font-size: 12px;
+  color: #667258;
+}
+.fetch-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px;
+  margin: 0;
+  font-size: 12px;
+  color: #795d35;
+  background: #f5f0e6;
+  border-radius: 10px;
+}
+.fetch-error svg {
+  flex-shrink: 0;
+  width: 17px;
+}
 .copy-title {
   margin: 0 0 9px;
   font-size: 11px;

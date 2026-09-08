@@ -6,23 +6,30 @@ export function VerificationDetails({ state }: { state: State }) {
     .reverse()
     .find((r) => r.route === "forwarded");
   const packet =
-    state.scenario === "forwarding"
-      ? (sentCopy?.packet ?? state.copy)
-      : state.registry.at(-1);
+    state.scenario === "database"
+      ? state.fetchOutcome
+        ? state.receipts.find((r) => r.id === state.fetchOutcome?.id)?.packet
+        : state.storage[state.storageReference ?? ""]?.packet
+      : state.scenario === "forwarding"
+        ? (sentCopy?.packet ?? state.copy)
+        : state.registry.at(-1);
   const replaces = packet?.replaces
     ? state.registry.find((p) => p.reference === packet.replaces)
     : null;
-  const example = {
-    text: packet?.text ?? state.draft,
-    meddelandeId: packet?.id ?? "Tilldelas vid publicering",
-    version: packet?.version ?? 1,
-    avsändare: packet?.sender ?? SENDERS[0].id,
-    nyckelidentitet: packet?.keyId ?? SENDERS[0].keyId,
-    sammanhang: packet?.context ?? state.subscription,
-    ersätter: replaces
-      ? { meddelandeId: replaces.id, version: replaces.version }
-      : null,
-  };
+  const example =
+    state.scenario === "database" && !packet
+      ? null
+      : {
+          text: packet?.text ?? state.draft,
+          meddelandeId: packet?.id ?? "Tilldelas vid publicering",
+          version: packet?.version ?? 1,
+          avsändare: packet?.sender ?? SENDERS[0].id,
+          nyckelidentitet: packet?.keyId ?? SENDERS[0].keyId,
+          sammanhang: packet?.context ?? state.subscription,
+          ersätter: replaces
+            ? { meddelandeId: replaces.id, version: replaces.version }
+            : null,
+        };
   return (
     <details className="verification-details">
       <summary>Så fungerar verifieringen</summary>
@@ -31,20 +38,63 @@ export function VerificationDetails({ state }: { state: State }) {
         <div className="mechanism-grid">
           <section className="package-example">
             <h3>
-              {state.scenario === "forwarding"
-                ? sentCopy
-                  ? "Senast mottagna kopia"
-                  : "Kopia att skicka"
-                : packet
-                  ? "Senast publicerade paket"
-                  : "Förberett paket"}
+              {state.scenario === "database"
+                ? state.fetchOutcome
+                  ? "Senaste lagringssvar"
+                  : "Post i lagringen"
+                : state.scenario === "forwarding"
+                  ? sentCopy
+                    ? "Senast mottagna kopia"
+                    : "Kopia att skicka"
+                  : packet
+                    ? "Senast publicerade paket"
+                    : "Förberett paket"}
             </h3>
             <pre aria-label="Paketexempel">
-              {JSON.stringify(example, null, 2)}
+              {example === null
+                ? "Inget meddelandepaket att visa."
+                : JSON.stringify(example, null, 2)}
             </pre>
             <p>Värden från modellen; nyckelidentiteten är en demoidentitet.</p>
           </section>
           <div className="mechanism-blocks">
+            {state.scenario === "database" && (
+              <section>
+                <h3>Efter intrånget: bara lagringen är angripen</h3>
+                <p>
+                  Här börjar demonstrationen efter ett antaget intrång och visar
+                  upptäckt och hantering, inte intrångsprevention. Angriparen
+                  kan skriva och radera i meddelandelagringen. Alex
+                  signeringsbehörighet, organisationens betrodda nyckelkoppling,
+                  kedjans publiceringsunderlag och mottagarens verifieringskod
+                  ligger utanför angreppet.
+                </p>
+              </section>
+            )}
+            {state.scenario === "database" && (
+              <section>
+                <h3>Databasens påstående är inte ett godkännande</h3>
+                <p>
+                  Mottagaren kontrollerar det hämtade paketets signatur och
+                  fingeravtryck mot separat betrott underlag. Databasens egen
+                  ”verifierad”-flagga är obetrodd metadata och ignoreras vid
+                  kontrollen; inte heller ett nytt hashvärde i samma databas
+                  skapar organisationsgodkännande.
+                </p>
+              </section>
+            )}
+            {state.scenario === "database" && (
+              <section>
+                <h3>Upptäckt utan återställningslöfte</h3>
+                <p>
+                  Signaturkontroll kan upptäcka ändringar utan blockchain.
+                  Kedjan tillför ett separat kontrollerbart
+                  publiceringsregister. Varken signatur eller hash återställer
+                  raderad text; bara en redan mottagen lokal kopia kan finnas
+                  kvar här.
+                </p>
+              </section>
+            )}
             <section>
               <h3>Paket → entydiga byte</h3>
               <p>
