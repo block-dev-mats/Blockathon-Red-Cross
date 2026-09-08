@@ -1,3 +1,5 @@
+import { exists } from "./sepolia-deployment.ts";
+import { startDeploymentApi } from "../server/deployment-api.ts";
 import { createConnection } from "node:net";
 import { createServer } from "vite";
 import { fileURLToPath } from "node:url";
@@ -19,13 +21,15 @@ export async function freePorts(ports: readonly number[]) {
 export async function startProfile(id: ProfileId, frontend = true) {
   const profile = profileById(id);
   await freePorts(frontend ? [profile.apiPort, profile.frontendPort] : [profile.apiPort]);
-  const config = await loadDeployment(id);
-  const api = await startApi(config, `${profileDirectory(id)}/demo.sqlite`, profile.apiPort, `http://127.0.0.1:${profile.frontendPort}`);
+  const setup = id === "sepolia" && !await exists(`${profileDirectory(id)}/deployment.json`);
+  const api = setup ? await startDeploymentApi(profileDirectory(id), profile.apiPort) :
+    await startApi(await loadDeployment(id), `${profileDirectory(id)}/demo.sqlite`, profile.apiPort, `http://127.0.0.1:${profile.frontendPort}`);
   let vite: Awaited<ReturnType<typeof createServer>> | undefined;
   try {
-    if (frontend) { vite = await createServer({ ...profileViteConfig(id), configFile: false }); await vite.listen(); }
+    if (frontend) { vite = await createServer({ ...profileViteConfig(id, { setup }), configFile: false }); await vite.listen(); }
   } catch (error) { await api.close(); throw error; }
   console.log(`${profile.label}: API http://127.0.0.1:${profile.apiPort}${frontend ? ` · app http://127.0.0.1:${profile.frontendPort}` : ""}`);
+  if (setup) console.log("Öppna http://127.0.0.1:5176/deploy. Ingen deployment skickas vid start.");
   return { close: async () => { await vite?.close(); await api.close(); } };
 }
 async function main() {

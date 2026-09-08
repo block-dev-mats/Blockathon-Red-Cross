@@ -1,3 +1,4 @@
+import { assertRuntime } from "../shared/deployment.ts";
 import { readFile } from "node:fs/promises";
 import { encodeDeployData, keccak256, toBytes } from "viem";
 import type { Abi, Address, Hex } from "viem";
@@ -15,13 +16,5 @@ export async function deploymentData(publisher: Address) {
     args: [publisher, demoContext.organisation, demoContext.feed, demoContext.messageId] });
 }
 export async function assertCompiledCode(actual: Hex) {
-  const artifact = await contractArtifact();
-  let observed = actual.slice(2).toLowerCase(), expected = artifact.deployedBytecode.object.slice(2).toLowerCase();
-  if (observed.length !== expected.length) throw new Error("Kontraktets kodlängd avviker från det kompilerade kontraktet.");
-  for (const refs of Object.values(artifact.deployedBytecode.immutableReferences)) for (const { start, length } of refs) {
-    const blank = "0".repeat(length * 2), at = start * 2;
-    observed = observed.slice(0, at) + blank + observed.slice(at + blank.length);
-    expected = expected.slice(0, at) + blank + expected.slice(at + blank.length);
-  }
-  if (observed !== expected) throw new Error("Deploymenten motsvarar inte kompilerad CrisisRegistry-kod.");
+  assertRuntime(actual, (await contractArtifact()).deployedBytecode);
 }

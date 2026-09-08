@@ -1,14 +1,14 @@
 // Offline test infrastructure ONLY. A real temporary EVM uses Sepolia's chain ID.
 // This facade substitutes the genesis hash and HTTPS destination to exercise the
 // unchanged production validators. It is not evidence of public Sepolia or CORS.
-import { createWalletClient, http, keccak256, parseEther, toHex } from "viem";
+import { createWalletClient, http, parseEther, toHex } from "viem";
 import type { LocalAccount } from "viem";
 import type { BrowserContext } from "playwright";
 import { chainFor } from "../shared/chain.ts";
 import { parseConfig } from "../shared/protocol.ts";
 import { SEPOLIA_GENESIS } from "../shared/profiles.ts";
-import { deploymentData } from "../scripts/contract.ts";
-import { resumeDeployment } from "../scripts/sepolia-deployment.ts";
+import { prepareDeployment } from "../scripts/sepolia-deployment.ts";
+import { verifyDeployment } from "../shared/deployment.ts";
 import { sepoliaClient, settingsSchema } from "../scripts/sepolia-preflight.ts";
 
 export type RpcRequest = { id: number; method: string; params: unknown[] };
@@ -37,10 +37,13 @@ export async function sepoliaFixture(loopback: string, account: LocalAccount) {
     const admin = (method: string, params: unknown[] = []) => originalFetch(loopback, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) }).then(r => r.json());
     await admin("anvil_setBalance", [account.address, toHex(parseEther("100"))]);
-    const rawTransaction = await account.signTransaction({ chainId: 11155111, type: "eip1559", nonce: 0, data: await deploymentData(settings.publisher),
-      gas: 2_000_000n, maxFeePerGas: 10_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n });
-    const journal = { settings, rawTransaction, txHash: keccak256(rawTransaction) };
-    const config = parseConfig(await resumeDeployment(client, journal, settings), "sepolia");
+    const { plan } = await prepareDeployment(settings);
+    const rawTransaction = await account.signTransaction({ chainId: 11155111, type: "eip1559", nonce: plan.nonce, data: plan.data,
+      gas: BigInt(plan.gas), maxFeePerGas: BigInt(plan.maxFeePerGas), maxPriorityFeePerGas: BigInt(plan.maxPriorityFeePerGas) });
+    const txHash = await client.sendRawTransaction({ serializedTransaction: rawTransaction });
+    await client.waitForTransactionReceipt({ hash: txHash });
+    const journal = { plan, txHash };
+    const config = parseConfig(await verifyDeployment(client, plan, txHash), "sepolia");
     const wallet = createWalletClient({ account, chain: chainFor(config), transport: http(url) });
     return { config, wallet, settings, journal, serve, admin,
       setFault(value?: typeof fault) { fault = value; },

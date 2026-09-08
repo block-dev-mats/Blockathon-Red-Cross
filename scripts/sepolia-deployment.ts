@@ -1,64 +1,55 @@
-import { open, readFile } from "node:fs/promises";
-import { getContractAddress, keccak256, parseTransaction, recoverTransactionAddress } from "viem";
-import type { Hex, PublicClient, TransactionSerialized } from "viem";
-import { z } from "zod";
-import { hex32, parseConfig } from "../shared/protocol.ts";
-import { assertSnapshot, readSnapshot } from "../shared/chain.ts";
-import { profiles, SEPOLIA_GENESIS } from "../shared/profiles.ts";
-import { assertCompiledCode, demoContext, deploymentData } from "./contract.ts";
-import { settingsSchema } from "./sepolia-preflight.ts";
-import type { SepoliaSettings } from "./sepolia-preflight.ts";
+import { access, lstat, readFile, realpath, open, rename, unlink, link } from "node:fs/promises";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import { settingsSchema, planSchema, journalSchema } from "../shared/deployment.ts";
+import type { SepoliaSettings, DeploymentJournal } from "../shared/deployment.ts";
+import { deploymentPlan } from "./sepolia-preflight.ts";
+import { contractArtifact, deploymentData, demoContext } from "./contract.ts";
 
-export const journalSchema = z.strictObject({ settings: settingsSchema, txHash: hex32,
-  rawTransaction: z.string().regex(/^0x[0-9a-fA-F]+$/).transform(v => v as Hex) });
-export type DeploymentJournal = z.infer<typeof journalSchema>;
+export async function exists(path: string) { try { await access(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
+export async function ordinaryFile(path: string) {
+  const stat = await lstat(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || await realpath(path) !== path) throw new Error("En vanlig fil i projektets Sepolia-katalog krävs.");
+}
+export async function loadSettings(directory: string) {
+  if (!await exists(`${directory}/settings.json`)) throw new Error("Sepolia saknar .sepolia/settings.json. Ange publik browser-RPC, publisher och deployer enligt README.");
+  if (await realpath(directory) !== directory) throw new Error("Sepolia-katalogen får inte vara en symlänk.");
+  await ordinaryFile(`${directory}/settings.json`);
+  return settingsSchema.parse(JSON.parse(await readFile(`${directory}/settings.json`, "utf8")));
+}
+async function syncDirectory(path: string) {
+  const handle = await open(dirname(path), "r"); try { await handle.sync(); } finally { await handle.close(); }
+}
 export async function writeExclusive(path: string, data: unknown) {
-  const file = await open(path, "wx", 0o600);
-  try { await file.writeFile(JSON.stringify(data, null, 2) + "\n"); await file.sync(); } finally { await file.close(); }
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  const file = await open(temporary, "wx", 0o600);
+  try {
+    await file.writeFile(JSON.stringify(data, null, 2) + "\n"); await file.sync(); await file.close();
+    await link(temporary, path); // Atomic no-replace publication, never a partially written trust file.
+    await syncDirectory(path);
+  } finally { await file.close(); await unlink(temporary); }
 }
-export async function validateJournal(journal: DeploymentJournal, settings: SepoliaSettings) {
-  const tx = parseTransaction(journal.rawTransaction);
-  if (JSON.stringify(journal.settings) !== JSON.stringify(settings) || keccak256(journal.rawTransaction) !== journal.txHash ||
-      tx.chainId !== 11155111 || tx.to || (tx.value ?? 0n) !== 0n || tx.data !== await deploymentData(settings.publisher) ||
-      (await recoverTransactionAddress({ serializedTransaction: journal.rawTransaction as TransactionSerialized })).toLowerCase() !== settings.deployer)
-    throw new Error("Sparad deployment avviker från vald signerare, nätverk eller constructor. Ingen ny transaktion skickas.");
-  return tx;
+export async function updateJournal(path: string, journal: DeploymentJournal) {
+  await ordinaryFile(path);
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try { await writeExclusive(temporary, journal); await rename(temporary, path); await syncDirectory(path); }
+  finally { if (await exists(temporary)) await unlink(temporary); }
 }
-export async function resumeDeployment(client: PublicClient, journal: DeploymentJournal, settings: SepoliaSettings) {
-  const tx = await validateJournal(journal, settings);
-  if (await client.getChainId() !== 11155111 || (await client.getBlock({ blockNumber: 0n })).hash !== SEPOLIA_GENESIS)
-    throw new Error("Fel nätverk före broadcast.");
-  // Only an explicit not-found result permits broadcasting the same saved bytes.
-  // Timeouts/rate limits never trigger another signature, nonce or deployment.
-  let known = false;
-  try { await client.getTransaction({ hash: journal.txHash }); known = true; }
-  catch (error) {
-    if (!(error instanceof Error) || error.name !== "TransactionNotFoundError") throw new Error("RPC kunde inte fastställa tidigare transaktion. Deploymentjournalen behålls.");
-  }
-  if (!known) {
-    if (await client.getTransactionCount({ address: settings.deployer, blockTag: "latest" }) > tx.nonce!)
-      throw new Error("Nonce har redan använts men deploymentunderlag saknas. Ingen ny deployment skapas.");
-    try {
-      const hash = await client.sendRawTransaction({ serializedTransaction: journal.rawTransaction });
-      if (hash !== journal.txHash) throw new Error("Transaktionshashen avviker.");
-    } catch { throw new Error("Broadcast kunde inte bekräftas. Samma signerade transaktion och hash är sparade; kör sepolia:deploy igen."); }
-  }
-  const receipt = await client.waitForTransactionReceipt({ hash: journal.txHash, confirmations: 1,
-    timeout: profiles.sepolia.receiptTimeout, pollingInterval: profiles.sepolia.receiptPollInterval });
-  const expectedAddress = getContractAddress({ from: settings.deployer, nonce: BigInt(tx.nonce!) });
-  if (receipt.status !== "success" || receipt.from.toLowerCase() !== settings.deployer || receipt.to !== null ||
-      receipt.contractAddress?.toLowerCase() !== expectedAddress.toLowerCase())
-    throw new Error("Deploymenten saknar lyckad, matchande receipt. Journalen behålls.");
-  const includedTx = await client.getTransaction({ hash: journal.txHash });
-  if (includedTx.input !== tx.data || includedTx.blockHash !== receipt.blockHash) throw new Error("Inkluderad deployment avviker från godkänt underlag.");
-  const code = await client.getCode({ address: expectedAddress, blockNumber: receipt.blockNumber });
-  if (!code || code === "0x") throw new Error("Kontraktskod saknas.");
-  await assertCompiledCode(code);
-  const config = parseConfig({ domain: { name: "CrisisMessage", version: "1", chainId: 11155111, verifyingContract: expectedAddress },
-    rpcUrl: settings.rpcUrl, rpcVisibility: settings.rpcVisibility, publisher: settings.publisher, ...demoContext,
-    genesisHash: SEPOLIA_GENESIS, deploymentBlock: receipt.blockNumber.toString(), deploymentBlockHash: receipt.blockHash,
-    deploymentTxHash: journal.txHash, codeHash: keccak256(code) }, "sepolia");
-  const snapshot = await readSnapshot(client, config); await assertSnapshot(client, snapshot);
-  return config;
+export async function readJournal(path: string, settings: SepoliaSettings) {
+  await ordinaryFile(path);
+  const journal = journalSchema.parse(JSON.parse(await readFile(path, "utf8")));
+  if (JSON.stringify(journal.plan.settings) !== JSON.stringify(settings) || journal.plan.data !== await deploymentData(settings.publisher) ||
+    JSON.stringify(journal.plan.runtime) !== JSON.stringify(await runtimeArtifact()))
+    throw new Error("Sparad deployment avviker från settings eller kontraktsbuild. Journalen behålls; ingen ny deployment skapas.");
+  for (const field of ["organisation", "feed", "messageId"] as const) if (journal.plan[field] !== demoContext[field]) throw new Error("Sparad kontext avviker.");
+  return journal;
 }
-export async function readJournal(path: string) { return journalSchema.parse(JSON.parse(await readFile(path, "utf8"))); }
+export async function prepareDeployment(settings: SepoliaSettings) {
+  const estimate = await deploymentPlan(settings);
+  const plan = planSchema.parse({ settings, data: estimate.data, runtime: await runtimeArtifact(),
+    ...demoContext, nonce: estimate.nonce, gas: String(estimate.gas), maxFeePerGas: String(estimate.maxFeePerGas),
+    maxPriorityFeePerGas: String(estimate.maxPriorityFeePerGas), maxCost: String(estimate.maxCost) });
+  return { plan, balance: String(estimate.balance), sufficientBalance: estimate.sufficientBalance };
+}
+
+export async function runtimeArtifact() { const { object, immutableReferences } = (await contractArtifact()).deployedBytecode; return { object, immutableReferences }; }

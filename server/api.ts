@@ -8,7 +8,7 @@ import { assertSnapshot, publicationProof, readSnapshot, rpcClient } from "../sh
 import { MessageStore } from "./storage.ts";
 import { profileForChain } from "../shared/profiles.ts";
 
-async function input(req: IncomingMessage): Promise<unknown> {
+export async function input(req: IncomingMessage): Promise<unknown> {
   if (req.headers["content-type"] !== "application/json") throw new Error("JSON krävs.");
   const chunks: Buffer[] = [];
   let length = 0;

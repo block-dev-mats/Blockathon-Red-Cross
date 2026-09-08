@@ -1,27 +1,27 @@
-import { createPublicClient, encodeFunctionData, http, numberToHex, zeroHash } from "viem";
+import { encodeFunctionData, numberToHex, zeroHash } from "viem";
 import type { PublicClient } from "viem";
-import { z } from "zod";
-import { address, abi } from "../shared/protocol.ts";
+import { abi } from "../shared/protocol.ts";
 import type { TrustConfig } from "../shared/protocol.ts";
-import { SEPOLIA_GENESIS, validRpcUrl, profiles } from "../shared/profiles.ts";
+import { SEPOLIA_GENESIS } from "../shared/profiles.ts";
 import { assertSnapshot, readSnapshot } from "../shared/chain.ts";
 import { deploymentData } from "./contract.ts";
 import type { Page } from "playwright";
 
-export const settingsSchema = z.strictObject({
-  chainId: z.literal(11155111), rpcUrl: z.string().refine(url => validRpcUrl(11155111, url)),
-  rpcVisibility: z.literal("public-browser"), publisher: address, deployer: address,
-}).refine(s => s.publisher !== "0x0000000000000000000000000000000000000000" && s.deployer !== "0x0000000000000000000000000000000000000000", "Publika avsändaradresser måste anges.");
-export type SepoliaSettings = z.infer<typeof settingsSchema>;
-export const sepoliaClient = (s: SepoliaSettings) => createPublicClient({ transport: http(s.rpcUrl, { retryCount: 0, timeout: profiles.sepolia.rpcTimeout }), cacheTime: 0 });
+export { settingsSchema, sepoliaClient } from "../shared/deployment.ts";
+export type { SepoliaSettings } from "../shared/deployment.ts";
+import { sepoliaClient } from "../shared/deployment.ts";
+import type { SepoliaSettings } from "../shared/deployment.ts";
 export type ProbeRequest = { jsonrpc: "2.0"; id: number; method: string; params: unknown[] };
 export async function networkPreflight(s: SepoliaSettings, config?: TrustConfig) {
   const client = sepoliaClient(s);
   if (await client.getChainId() !== 11155111) throw new Error("RPC:n är inte Ethereum Sepolia L1 (11155111).");
-  if ((await client.getBlock({ blockNumber: 0n })).hash !== SEPOLIA_GENESIS) throw new Error("Fel Sepolia-genesis.");
+  const genesis = await client.getBlock({ blockNumber: 0n }).catch(() => { throw new Error("RPC-underlag saknas: Sepolias genesisblock (0) kunde inte läsas. En browserpublik RPC med detta underlag krävs."); });
+  if (genesis.hash !== SEPOLIA_GENESIS) throw new Error("Fel Sepolia-genesis.");
   const block = await client.getBlock({ blockTag: "latest" });
   const publisherCode = await client.getCode({ address: s.publisher, blockNumber: block.number });
   if (publisherCode && publisherCode !== "0x") throw new Error("Publiceraren måste vara en EOA utan kontraktskod.");
+  const deployerCode = await client.getCode({ address: s.deployer, blockNumber: block.number });
+  if (deployerCode && deployerCode !== "0x") throw new Error("Deployer måste vara en EOA utan kontraktskod.");
   let receiptHash = block.transactions[0] ?? zeroHash;
   if (config) {
     const snapshot = await readSnapshot(client, config);
@@ -87,6 +87,6 @@ export async function deploymentPlan(s: SepoliaSettings) {
   const fees = await client.estimateFeesPerGas();
   const balance = await client.getBalance({ address: s.deployer });
   const maxCost = gas * fees.maxFeePerGas;
-  if (balance < maxCost) throw new Error(`Deploysigneraren saknar test-ETH. Behöver täcka högst ${maxCost} wei med aktuell gasuppskattning.`);
-  return { data, nonce: await client.getTransactionCount({ address: s.deployer, blockTag: "pending" }), gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas, maxCost };
+
+  return { balance, sufficientBalance: balance >= maxCost, data, nonce: await client.getTransactionCount({ address: s.deployer, blockTag: "pending" }), gas, maxFeePerGas: fees.maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas, maxCost };
 }

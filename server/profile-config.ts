@@ -12,7 +12,7 @@ export async function loadDeployment(id: ProfileId) {
   catch { throw new Error(`Giltig deployment för ${id} saknas. Kör ${id === "local" ? "local:init" : "sepolia:check och explicit sepolia:deploy"}.`); }
 }
 export function profileViteConfig(id: ProfileId, overrides: {
-  readDeployment?: () => Promise<unknown>; frontendPort?: number; apiPort?: number;
+  setup?: boolean; readDeployment?: () => Promise<unknown>; frontendPort?: number; apiPort?: number;
 } = {}): UserConfig {
   const profile = profileById(id);
   return {
@@ -23,6 +23,14 @@ export function profileViteConfig(id: ProfileId, overrides: {
     define: { __APP_PROFILE__: JSON.stringify(id) },
     build: { outDir: `dist/${id}` },
     plugins: [{ name: "profile-deployment-trust", configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const path = req.url?.split("?")[0];
+        if (overrides.setup && id === "sepolia" && ["/", "/publish", "/inbox"].includes(path ?? "")) {
+          res.writeHead(302, { Location: "/deploy" }); res.end(); return;
+        }
+        if (path === "/deploy" && (!overrides.setup || id !== "sepolia")) { res.statusCode = 404; res.end("Deploymentläge är inte aktivt."); return; }
+        next();
+      });
       server.middlewares.use("/deployment.json", async (req, res) => {
         res.setHeader("Cache-Control", "no-store"); res.setHeader("Content-Type", "application/json");
         if (req.method !== "GET" || (req.url !== "/" && req.url !== "")) { res.statusCode = 404; res.end(); return; }

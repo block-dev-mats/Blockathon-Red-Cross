@@ -14,7 +14,7 @@ The following are team working rules, not requirements attributed to the problem
 
 ## Selected MVP decisions
 
-The implementation assignments selected the existing React/TypeScript/Vite frontend, a small Node API, SQLite, viem, OpenZeppelin EIP712/ECDSA and Foundry (Anvil/Forge/Cast). The immutable contract fixes one explicitly configured publisher EOA, organisation, feed and series at deployment. Local initialization generates a test publisher; Sepolia uses the operator's chosen public publisher address. Transport is a loopback HTTP API with automatic polling. These are MVP choices, not requirements attributed to the original problem statement. Real organisational onboarding, production networks, administration, revocation, offline distribution and Sullis/submission remain outside this implementation.
+The implementation assignments selected the existing React/TypeScript/Vite frontend, a small Node API, SQLite, viem, OpenZeppelin EIP712/ECDSA and Foundry (Anvil/Forge). The immutable contract fixes one explicitly configured publisher EOA, organisation, feed and series at deployment. Local initialization generates a test publisher; Sepolia uses the operator's chosen public publisher address. Transport is a loopback HTTP API with automatic polling. These are MVP choices, not requirements attributed to the original problem statement. Real organisational onboarding, production networks, administration, revocation, offline distribution and Sullis/submission remain outside this implementation.
 
 ## Run locally
 
@@ -62,54 +62,57 @@ All listeners bind to `127.0.0.1`. Use that hostname consistently. To reuse an a
 | `local` | http://127.0.0.1:5175/publish · http://127.0.0.1:5175/inbox | http://127.0.0.1:3001/api/health | Anvil 31337 · `.local/` |
 | `sepolia` | http://127.0.0.1:5176/publish · http://127.0.0.1:5176/inbox | http://127.0.0.1:3002/api/health | Ethereum Sepolia L1 11155111 · `.sepolia/` |
 
-The profiles can run simultaneously. Only network/deployment configuration, data directories, ports and timing differ (`shared/profiles.ts`). Product changes belong in the existing shared modules, not a Sepolia copy or branch. The original presentation remains at http://127.0.0.1:5175/. No web hosting is involved; only the Sepolia contract is public. Port conflicts fail without stopping another process. A missing/invalid Sepolia deployment fails startup; there is no fallback to local, the presentation or another contract.
+Both profiles use the same frontend, API, verifier, EIP-712 format and CrisisRegistry source. Only network/deployment settings, storage and timing differ. The presentation remains at http://127.0.0.1:5175/. All services bind to loopback; no web hosting is involved. Port conflicts never stop another process.
 
-Sepolia prerequisites: Foundry including `cast`, a funded **testnet-only deployer**, the chosen publisher's public EOA address, and an **HTTPS RPC intentionally suitable for public browser use**. The publisher also needs Sepolia test ETH for publishing. The deployer and publisher may be different addresses. This project neither buys nor bridges ETH and never inspects other wallets.
+### Deploy with MetaMask
 
-Prepare the ignored project directory and edit the example:
+Use a dedicated test account in your browser wallet. **No private-key export, Cast keystore, seed or password is needed by this app.** The same EOA can be both deployer and publisher. Foundry compiles the unchanged contract; the browser wallet signs and sends the deployment.
 
-```sh
-mkdir -p .sepolia
-chmod 700 .sepolia
-cp config/sepolia.example.json .sepolia/settings.json
-npx playwright install chromium
-```
+1. Create the ignored settings file (do not overwrite an existing one):
 
-Required `settings.json` fields:
+   ```sh
+   mkdir -p .sepolia
+   chmod 700 .sepolia
+   cp -n config/sepolia.example.json .sepolia/settings.json
+   ```
 
-- `chainId`: exactly `11155111` (mainnet and arbitrary chain IDs are rejected).
-- `rpcUrl`: a public browser HTTPS endpoint. Credentials, query strings and fragments are rejected. Do not put a secret token in its path either. If only a secret server RPC is available, obtain a browser-suitable endpoint before proceeding; this app has no RPC proxy.
-- `rpcVisibility`: exactly `"public-browser"`, the operator's explicit acknowledgment that this URL is public. The software cannot determine whether an opaque path is a secret.
-- `publisher`: the public EOA authorized to publish this series on Sepolia.
-- `deployer`: the public address of the selected testnet deployment signer.
+2. Edit these public fields:
+   - `chainId`: `11155111` only.
+   - `rpcUrl`: an HTTPS RPC explicitly suitable for public browser access. No credentials, secret tokens (including URL paths), query strings or fragments. It must serve the genesis block, deployment history and verifier methods; a working chain-ID call alone is insufficient. There is no RPC proxy or automatic fallback.
+   - `rpcVisibility`: `"public-browser"`.
+   - `publisher`: the public MetaMask account authorized to publish this series.
+   - `deployer`: the public MetaMask account sending deployment; it may equal `publisher`.
 
-The selected deployment signer uses a project-specific **encrypted V3 keystore**, `.sepolia/deployer`. In your own terminal, import only the intended testnet deployer using Cast's hidden prompts; never paste private keys, seeds or passwords into chat, Git or environment variables:
+3. Ensure the selected account(s) have **Sepolia test ETH**. The application does not buy, bridge or fund accounts.
+4. Check the build, chain/genesis, publisher/deployer EOAs, RPC methods, actual browser CORS, estimated cost and available balance:
 
-```sh
-cast wallet import --interactive --keystore-dir .sepolia deployer
-chmod 600 .sepolia/deployer
-npm run sepolia:check
-```
+   ```sh
+   npx playwright install chromium
+   npm run sepolia:check
+   ```
 
-`sepolia:check` compiles the **same** CrisisRegistry, validates chain/genesis, publisher EOA, required RPC methods and actual browser fetches from origin `http://127.0.0.1:5176`. Server success alone is insufficient for CORS. Before first deployment it also checks keystore address/permissions, constructor arguments, gas estimate/fee cap and deployer balance. Missing evidence fails; no verifier checks are weakened for limited RPC providers. After deployment it rechecks the saved contract/context and deployment receipt. The pinned [Sepolia execution genesis](https://github.com/eth-clients/sepolia) is checked separately from chain ID.
+5. Start setup and open http://127.0.0.1:5176/deploy in the browser with MetaMask:
 
-Review the public addresses, constructor identifiers, nonce and maximum estimated cost printed by preflight. **Deployment is a separate explicit action** in your own terminal:
+   ```sh
+   npm run sepolia:deploy
+   ```
 
-```sh
-npm run sepolia:deploy -- --broadcast
-```
+6. Select Ethereum Sepolia and the exact configured deployer yourself. Choose **Kontrollera MetaMask**, inspect publisher/deployer and the estimated maximum cost, then **Deploya på Sepolia** and approve the transaction in MetaMask. Starting the command or opening the page never sends a transaction.
+7. After **Deployment verifierad och sparad**, stop this Sepolia process with Ctrl+C and start the normal shared app:
 
-Without `--broadcast`, this command performs preflight only. Cast unlocks the project keystore with its hidden password prompt and signs the checked constructor transaction. The application runtime never opens this keystore, possesses the publisher key or signs database contents. The signed deployment bytes and hash are saved durably in `.sepolia/pending-deployment.json` **before broadcast**. On timeout, interruption or 429, keep the journal and rerun the same command. It queries/rebroadcasts only those exact bytes; it never chooses another nonce or creates a replacement deployment automatically. If the nonce was consumed but evidence is absent, it stops for investigation.
+   ```sh
+   npm run sepolia:start
+   ```
 
-Only a successful included receipt, matching transaction/contract address, compiled runtime code and immutable context produce `.sepolia/deployment.json` and the initial `.sepolia/demo.sqlite`. The script prints the actual contract address and transaction hash. It never overwrites an existing deployment. There is no usable Sepolia profile before this step succeeds.
+   Open http://127.0.0.1:5176/publish and http://127.0.0.1:5176/inbox in independent sessions. The existing Anvil process can remain running throughout.
 
-Normal start, alongside `local:start` in another terminal:
+If deployment is absent, `sepolia:start` also enters setup mode and redirects `/publish` and `/inbox` to `/deploy`. Missing settings produce an explicit configuration error there. Invalid existing deployment files fail startup; they never trigger replacement or Anvil fallback. Once normal application mode is running, `/deploy` is unavailable.
 
-```sh
-npm run sepolia:start
-```
+The browser sends exact compiled bytecode plus the unchanged constructor context through EIP-1193. The setup-only API on 127.0.0.1:3002 requires the local app's origin for writes and accepts no arbitrary config/file paths. It never signs or broadcasts. Browser and server independently require a successful included receipt, matching sender/nonce/constructor/address, compiled runtime code and immutable context, Sepolia genesis, deployment block/hash and a stable control block. Only then can the server create `.sepolia/demo.sqlite` and write `.sepolia/deployment.json`. Confirmation is idempotent and cannot replace a deployment.
 
-Normal start reads existing configuration/SQLite, checks the chain and starts only the loopback API/Vite servers. It never deploys, funds, creates a missing database or resets data. Ctrl+C stops these processes. `npm run build` checks TypeScript and builds the common app for both profiles into `dist/local` and `dist/sepolia`; these bundles contain no deployment configuration or keystore. For the low-level Vite CLI the explicit modes are `app-local` and `app-sepolia` because Vite reserves the name `local`.
+A durable `.sepolia/pending-deployment.json` is written **before** the browser may call the wallet. Concurrent tabs cannot begin another attempt. After the wallet returns a hash it is also saved in browser storage and the journal. A timeout/429 leaves the attempt intact: use **Fortsätt kontrollera deploymenten** after reload/restart; this only reads/validates and never sends another transaction. If the send result is unknown without a hash, inspect MetaMask's activity and enter the actual public deployment transaction hash. Never delete the journal to retry an uncertain broadcast. A rejected/aborted dialog conservatively retains the intent too; if no transaction was sent, an operator must establish that fact before deliberately removing that attempt. There is no automatic reset or nonce change. Legacy Cast journals are not silently migrated, reused or deleted.
+
+Normal startup never deploys, funds, creates a missing application database or resets data. A later contract-source change requires a separate explicit deployment decision. `npm run build` checks TypeScript and builds the common application into `dist/local` and `dist/sepolia`; runtime settings, journals and keys are not bundled. Low-level Vite modes remain `app-local` and `app-sepolia`.
 
 Vite serves a strictly validated public `/deployment.json` for its selected profile only. Both devservers deny file access to `.local`, `.local-backups`, `.sepolia`, `.git` and secret file types. `.env` files are not loaded by Vite. Deployment config stays outside SQLite and includes the RPC, EIP-712 domain, publisher/context, genesis, deployment block/hash, code hash and Sepolia deployment transaction hash. Do not add secrets or `VITE_` key material.
 
@@ -198,12 +201,15 @@ npm run build
 npx playwright install chromium
 npm run test:browser
 npm run test:profiles
+npm run test:deployment
 git diff --check
 ```
 
 The existing 50 presentation/model tests are preserved. The MVP suite starts a separate temporary Anvil/SQLite/API environment and checks typed-digest parity, exact Unicode/text, metadata/domain/signature changes, unauthorized senders, fixed series, replay, concurrent predecessors, pending storage, cancellation, failed storage, reverted mined receipts, immutable/idempotent writes, direct database tampering/rollback/deletion, false reference confirmation, cache duplicates, late callbacks, missing evidence, RPC failure, and both backend and chain restart. Browser tests use separate publisher/recipient contexts, exercise real signatures and local transactions, automatic updates, reload/restart, all three database demonstrations, RPC interruption and the original presentation. Fixtures and browser surfaces are closed afterward. Screenshots are ignored under `output/playwright/`.
 
-`test:profiles` runs both profiles together using temporary Anvil instances, SQLite/API servers and browser origins. Its **test-only** Sepolia RPC facade emulates Sepolia's chain ID, genesis and HTTPS destination over loopback; this is not a public Sepolia deployment or CORS result. It covers cross-profile rejection, routing/cache/attempt isolation, pending receipt/429 recovery without duplicate publication, real Cast signing from a disposable encrypted keystore, deployment-journal resumption, bytecode checks, immutable context, changed control blocks, database tampering/rollback/deletion and unavailable evidence. A separate real browser/HTTP fixture checks that server RPC success with blocked CORS fails. Normal automated tests never call a public RPC, faucet or testnet. Only the explicit `sepolia:check`/`sepolia:deploy` commands exercise the configured public endpoint.
+`test:profiles` runs both profiles together using temporary Anvil instances, SQLite/API servers and browser origins. Its **test-only** Sepolia RPC facade emulates Sepolia's chain ID, genesis and HTTPS destination over loopback; this is not a public Sepolia deployment or CORS result. It covers cross-profile rejection, routing/cache/attempt isolation, pending receipt/429 recovery without duplicate publication, deployment receipt validation, bytecode checks, immutable context, changed control blocks, database tampering/rollback/deletion and unavailable evidence. A separate real browser/HTTP fixture checks that server RPC success with blocked CORS fails. Normal automated tests never call a public RPC, faucet or testnet. Only explicit Sepolia commands and the Sepolia browser views exercise the configured public endpoint.
+
+`test:deployment` runs the actual setup API and `/deploy` view with a test-only EIP-1193 provider backed by generated accounts and real local EVM transactions. It covers wrong account/network, missing wallet, foreign-origin writes, pending/429, restart/resume and lost send responses without duplicate deployment, altered constructor/context/genesis, idempotent confirmation, and subsequent shared publish/inbox in independent browser sessions. Private keys stay in the test process. This does **not** verify MetaMask extension dialogs or public Sepolia deployment.
 
 ## Original presentation: present and reset
 

@@ -1,14 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
-import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "playwright";
-import type { EIP1193Provider, PublicClient, Hex } from "viem";
-import { keccak256, zeroHash } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import type { EIP1193Provider, PublicClient } from "viem";
+import { zeroHash } from "viem";
 import { environment, signed, testDevice, unusedPort } from "./helpers.ts";
 import { abi, freezeDraft, parseConfig, typedData, verifyEnvelope } from "../shared/protocol.ts";
 import { readSnapshot, assertSnapshot } from "../shared/chain.ts";
@@ -16,9 +13,9 @@ import { profileById, profiles, validRpcUrl } from "../shared/profiles.ts";
 import { profileDirectory, profileViteConfig } from "../server/profile-config.ts";
 import { freePorts } from "../scripts/runtime.ts";
 import { checkBrowserRpc, deploymentPlan, networkPreflight } from "../scripts/sepolia-preflight.ts";
-import { resumeDeployment, validateJournal, writeExclusive, readJournal } from "../scripts/sepolia-deployment.ts";
+import { writeExclusive, readJournal } from "../scripts/sepolia-deployment.ts";
 import { assertCompiledCode } from "../scripts/contract.ts";
-import { castSignArguments } from "../scripts/sepolia.ts";
+import { verifyDeployment } from "../shared/deployment.ts";
 import { demoAction } from "../scripts/demo.ts";
 import { publishAttempt, restoreAttempt } from "../src/live/publish.ts";
 import type { Attempt } from "../src/live/publish.ts";
@@ -90,59 +87,22 @@ test("shared product with two isolated profiles (Sepolia settings emulated offli
     const result = await networkPreflight(fixture.settings, sepolia.config);
     assert.ok(result.receiptEvidenceAvailable);
     const plan = await deploymentPlan(fixture.settings); assert.ok(plan.gas > 0n); assert.ok(plan.maxCost > 0n);
-    // Cast's actual CLI signs the same constructor/gas plan from an encrypted
-    // disposable test keystore. No browser extension dialog is claimed here.
-    const key = generatePrivateKey(), password = randomBytes(24).toString("hex");
-    const passwordFile = `${sepolia.root}/test-password`;
-    await writeFile(passwordFile, password, { mode: 0o600 });
-    const childEnv = { PATH: process.env.PATH, HOME: sepolia.root, CAST_UNSAFE_PASSWORD: password };
-    const imported = spawnSync("cast", ["wallet", "import", "test-deployer", "--keystore-dir", sepolia.root, "--private-key", key], { env: childEnv, encoding: "utf8" });
-    assert.equal(imported.status, 0, "Disposable encrypted test keystore import failed");
-    const s = { ...fixture.settings, deployer: privateKeyToAccount(key).address.toLowerCase() as Hex };
-    // Cast can work fully offline with these explicit tx fields; substitute
-    // loopback only for its own RPC transport (the JS facade is process-local).
-    const args = castSignArguments({ ...s, rpcUrl: `http://127.0.0.1:${new URL(fixture.settings.rpcUrl).pathname.slice(1)}` }, plan, `${sepolia.root}/test-deployer`);
-    args.splice(1, 0, "--password-file", passwordFile);
-    const signedTx = spawnSync("cast", args, { env: { PATH: process.env.PATH, HOME: sepolia.root }, encoding: "utf8" });
-    assert.equal(signedTx.status, 0, "Cast mktx failed for the explicit local test plan");
-    const rawTransaction = signedTx.stdout.trim() as Hex;
-    await validateJournal({ settings: s, rawTransaction, txHash: keccak256(rawTransaction) }, s);
     const code = await sepolia.client.getCode({ address: sepolia.config.domain.verifyingContract });
     await assertCompiledCode(code!); await assert.rejects(assertCompiledCode("0x1234"));
     const path = `${sepolia.root}/pending-deployment.json`;
-    await writeExclusive(path, fixture.journal);
-    await assert.rejects(writeExclusive(path, fixture.journal));
-    const journal = await readJournal(path);
-    await assert.rejects(validateJournal({ ...journal, txHash: zeroHash }, fixture.settings));
-    await assert.rejects(validateJournal(journal, { ...fixture.settings, publisher: local.config.domain.verifyingContract }));
+    await writeExclusive(path, fixture.journal); await assert.rejects(writeExclusive(path, fixture.journal));
+    const journal = await readJournal(path, fixture.settings);
+    await assert.rejects(readJournal(path, { ...fixture.settings, publisher: local.config.domain.verifyingContract }));
     let broadcasts = 0;
     const failing = new Proxy(sepolia.client, { get(target, key) {
-      if (key === "waitForTransactionReceipt") return async () => { throw new Error("Receipt timeout / 429"); };
-      if (key === "sendRawTransaction") return async () => { broadcasts++; throw new Error("Must not rebroadcast a known transaction"); };
+      if (key === "getTransactionReceipt") return async () => { throw new Error("Receipt timeout / 429"); };
+      if (key === "sendRawTransaction") return async () => { broadcasts++; throw new Error("Verifier must never broadcast"); };
       return Reflect.get(target, key);
     } });
-    await assert.rejects(resumeDeployment(failing, journal, fixture.settings));
-    assert.equal((await readJournal(path)).txHash, journal.txHash);
-    const resumed = await resumeDeployment(sepolia.client, await readJournal(path), fixture.settings);
+    await assert.rejects(verifyDeployment(failing, journal.plan, journal.txHash!));
+    assert.equal((await readJournal(path, fixture.settings)).txHash, journal.txHash);
+    const resumed = await verifyDeployment(sepolia.client, journal.plan, journal.txHash!);
     assert.deepEqual(resumed, sepolia.config); assert.equal(broadcasts, 0);
-    // The first broadcast reached the EVM but the response was lost. Resume
-    // from the file written before sending; exactly one deployment is mined.
-    const beforeNonce = await sepolia.client.getTransactionCount({ address: fixture.settings.deployer });
-    const nextRaw = await sepolia.account.signTransaction({ chainId: 11155111, type: "eip1559", nonce: beforeNonce,
-      data: plan.data, gas: plan.gas, maxFeePerGas: plan.maxFeePerGas, maxPriorityFeePerGas: plan.maxPriorityFeePerGas });
-    const nextJournal = { settings: fixture.settings, rawTransaction: nextRaw, txHash: keccak256(nextRaw) };
-    const nextPath = `${sepolia.root}/ambiguous-deployment.json`; await writeExclusive(nextPath, nextJournal);
-    let sent = 0;
-    const lostResponse = new Proxy(sepolia.client, { get(target, key) {
-      if (key === "sendRawTransaction") return async (args: Parameters<typeof target.sendRawTransaction>[0]) => {
-        sent++; await target.sendRawTransaction(args); throw new Error("Response timeout after send");
-      };
-      return Reflect.get(target, key);
-    } });
-    await assert.rejects(resumeDeployment(lostResponse, await readJournal(nextPath), fixture.settings), /Broadcast/);
-    const recovered = await resumeDeployment(lostResponse, await readJournal(nextPath), fixture.settings);
-    assert.notEqual(recovered.domain.verifyingContract, sepolia.config.domain.verifyingContract);
-    assert.equal(sent, 1); assert.equal(await sepolia.client.getTransactionCount({ address: fixture.settings.deployer }), beforeNonce + 1);
     const snapshot = await readSnapshot(sepolia.client, sepolia.config);
     const changedBlock = new Proxy(sepolia.client, { get(target, key) { return key === "getBlock" ? async () => ({ hash: zeroHash }) : Reflect.get(target, key); } });
     await assert.rejects(assertSnapshot(changedBlock as PublicClient, snapshot));
