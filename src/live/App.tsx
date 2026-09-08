@@ -10,32 +10,33 @@ import type { CheckedMessage, InboxState } from "./inbox.ts";
 import { publishAttempt, restoreAttempt, reconcileAttempt, mayHaveSent, isCompletedAttempt, StorageCheckUnavailable } from "./publish.ts";
 import type { Attempt, Stage } from "./publish.ts";
 import { activeProfile, readSaved, storageKey } from "./profile.ts";
+import { englishNotice } from "./copy.ts";
 import "./live.css";
 
 declare global { interface Window { ethereum?: EIP1193Provider } }
-const clock = (iso?: string) => iso ? new Date(iso).toLocaleTimeString("sv-SE") : "–";
+const clock = (iso?: string) => iso ? new Date(iso).toLocaleTimeString("en-GB") : "–";
 function Details({ entry, config, snapshot }: { entry?: CheckedMessage; config: TrustConfig; snapshot?: ChainSnapshot }) {
-  return <details className="evidence"><summary>Visa kontrollunderlag</summary><dl>
-    <dt>Behörig avsändare</dt><dd>{config.publisher}</dd>
-    <dt>Kontrakt · nätverk</dt><dd>{config.domain.verifyingContract} · {config.domain.chainId}</dd>
-    {activeProfile.id === "sepolia" && <><dt>Sepolia-explorer</dt><dd><a href={`https://sepolia.etherscan.io/address/${config.domain.verifyingContract}`} target="_blank" rel="noreferrer">Kontrakt</a>{entry?.proof && <> · <a href={`https://sepolia.etherscan.io/tx/${entry.proof.txHash}`} target="_blank" rel="noreferrer">Publiceringstransaktion</a></>}</dd></>}
-    {entry?.packet && <><dt>Innehållshash · exakt UTF-8-text</dt><dd>{entry.packet.message.bodyHash}</dd>
-      <dt>Paketdigest · EIP-712</dt><dd>{entry.packet.packageDigest}</dd>
-      <dt>Föregående paketdigest</dt><dd>{entry.packet.message.previousDigest}</dd></>}
-    {entry?.proof && <><dt>Bekräftad transaktion</dt><dd>{entry.proof.txHash}</dd></>}
-    {snapshot && <><dt>Kontrollblock</dt><dd>{snapshot.blockNumber.toString()} · {snapshot.blockHash}</dd></>}
+  return <details className="evidence"><summary>Verification details</summary><dl>
+    <dt>Authorized sender</dt><dd>{config.publisher}</dd>
+    <dt>Contract · network</dt><dd>{config.domain.verifyingContract} · {config.domain.chainId}</dd>
+    {activeProfile.id === "sepolia" && <><dt>Explorer</dt><dd><a href={`https://sepolia.etherscan.io/address/${config.domain.verifyingContract}`} target="_blank" rel="noreferrer">Contract</a>{entry?.proof && <> · <a href={`https://sepolia.etherscan.io/tx/${entry.proof.txHash}`} target="_blank" rel="noreferrer">Publication transaction</a></>}</dd></>}
+    {entry?.packet && <><dt>Content hash · exact UTF-8 text</dt><dd>{entry.packet.message.bodyHash}</dd>
+      <dt>Package digest · EIP-712</dt><dd>{entry.packet.packageDigest}</dd>
+      <dt>Previous package digest</dt><dd>{entry.packet.message.previousDigest}</dd></>}
+    {entry?.proof && <><dt>Confirmed transaction</dt><dd>{entry.proof.txHash}</dd></>}
+    {snapshot && <><dt>Verification block</dt><dd>{snapshot.blockNumber.toString()} · {snapshot.blockHash}</dd></>}
   </dl></details>;
 }
 function MessageCard({ entry, config, snapshot, checking }: { entry: CheckedMessage; config: TrustConfig; snapshot?: ChainSnapshot; checking: boolean }) {
-  const labels = { current: "Aktuell version", superseded: "Ersatt version", pending: "Väntar på kontroll", failed: "Underkänd leverans", unavailable: "Aktuell status okänd" };
+  const labels = { current: "Current", superseded: "Superseded", pending: "Checking", failed: "Verification failed", unavailable: "Current status unknown" };
   return <article className={`message ${entry.status}`} data-testid="message" data-status={entry.status}>
-    <div className="message-meta"><strong>{entry.signature === "failed" ? "Underkänd leverans" : `Alex · Version ${entry.packet?.message.version}`}</strong>
+    <div className="message-meta"><strong>{entry.signature === "failed" ? "Verification failed" : `Alex · Version ${entry.packet?.message.version}`}</strong>
       <span className="status">{labels[entry.status]}</span></div>
     <p className="message-body" data-testid="message-body">{entry.body}</p>
-    <p className="signature">{entry.signature === "passed" ? "✓ Text och signatur stämmer" : "× Text, signatur eller sammanhang stämmer inte"}
-      {entry.cached ? " · Sparad kopia" : ""}</p>
-    {entry.reason && <p className="muted">{entry.reason}</p>}
-    {snapshot && !checking && entry.proof && <p className="muted">Status kontrollerad {clock(snapshot.checkedAt)}</p>}
+    <p className="signature">{entry.signature === "passed" ? "✓ Text and signature verified" : "× Text, signature or context mismatch"}
+      {entry.cached ? " · Saved copy" : ""}</p>
+    {entry.reason && <p className="muted">{englishNotice(entry.reason)}</p>}
+    {snapshot && !checking && entry.proof && <p className="muted">Checked {clock(snapshot.checkedAt)}</p>}
     <Details entry={entry} config={config} snapshot={checking ? undefined : snapshot} />
   </article>;
 }
@@ -55,23 +56,23 @@ function Inbox({ config }: { config: TrustConfig }) {
     return () => { disposed = true; clearTimeout(timer); verifier.dispose(); };
   }, [config]);
   return <>
-    <header className="page-heading"><p className="eyebrow">KIM · PRENUMERERAR</p><h1>Övning Norr</h1><p>Meddelanden från Alex kontrolleras automatiskt.</p></header>
+    <header className="page-heading"><h1>North exercise</h1></header>
     <div className="feed-summary" role="status" aria-live="polite">
-      {state.checking ? "Kontrollerar meddelanden och aktuell status…" : state.chainError ?? `Senast lyckad statuskontroll ${clock(state.lastSuccess)}`}
+      {state.checking ? "Checking…" : (state.chainError ? englishNotice(state.chainError) : undefined) ?? `Last checked ${clock(state.lastSuccess)}`}
     </div>
-    {state.chainError && state.lastSuccess && <p className="muted">Tidigare lyckad kontroll {clock(state.lastSuccess)}. Den visar inte aktuell status.</p>}
-    {state.deliveryError && <p className="notice warning" role="alert">{state.deliveryError}</p>}
-    {state.missingHead && <p className="notice warning" data-testid="missing-head" role="alert">Innehåll saknas i leveransen för kedjans senaste version {state.snapshot?.version}. {state.entries.some(e => e.cached && e.status === "current") ? "En tidigare sparad kopia visas nedan." : "En äldre version är inte aktuell."}</p>}
-    {!state.entries.length && !state.checking && <div className="empty"><span aria-hidden="true">↳</span><h2>{state.snapshot?.version ? "Meddelandets innehåll saknas" : state.snapshot ? "Inget meddelande ännu" : "Kontrollen kunde inte genomföras"}</h2><p>{state.snapshot?.version ? "Kedjans hash kan inte återskapa texten." : "Nya meddelanden visas här automatiskt."}</p></div>}
-    <section className="message-list" aria-label="Meddelandeflöde">{state.entries.map((entry, index) => <MessageCard key={index} entry={entry} config={config} snapshot={state.snapshot} checking={state.checking} />)}</section>
+    {state.chainError && state.lastSuccess && <p className="muted">Previously checked {clock(state.lastSuccess)}. Current status is unknown.</p>}
+    {state.deliveryError && <p className="notice warning" role="alert">{englishNotice(state.deliveryError)}</p>}
+    {state.missingHead && <p className="notice warning" data-testid="missing-head" role="alert">Content is missing for the latest published version {state.snapshot?.version}. {state.entries.some(e => e.cached && e.status === "current") ? "A previously saved copy is shown below." : "An older version is not current."}</p>}
+    {!state.entries.length && !state.checking && <div className="empty"><span aria-hidden="true">↳</span><h2>{state.snapshot?.version ? "Message content missing" : state.snapshot ? "No messages yet" : "Unable to verify"}</h2><p>{state.snapshot?.version ? "The text cannot be recovered from its hash." : "New messages appear here automatically."}</p></div>}
+    <section className="message-list" aria-label="Messages">{state.entries.map((entry, index) => <MessageCard key={index} entry={entry} config={config} snapshot={state.snapshot} checking={state.checking} />)}</section>
   </>;
 }
 const stageLabels: Record<Stage, string> = {
-  wallet: "Kontrollerar wallet…", signing: "Godkänn signaturen i din wallet…", storing: "Lagrar det signerade paketet…",
-  transaction: "Godkänn publiceringstransaktionen i din wallet…", confirming: "Inväntar lyckad kedjebekräftelse och lagringskvitto…", complete: "Publicerat och bekräftat",
+  wallet: "Checking wallet…", signing: "Approve the signature in your wallet…", storing: "Saving signed message…",
+  transaction: "Approve publication in your wallet…", confirming: "Waiting for chain and storage confirmation…", complete: "Published and confirmed",
 };
 function Publisher({ config }: { config: TrustConfig }) {
-  const [body, setBody] = useState("Samling vid övningsplats Norr klockan 14.00. Ta med reflexväst och vatten.");
+  const [body, setBody] = useState("Meet at the North exercise site at 14.00. Bring a reflective vest and water.");
   const [head, setHead] = useState<ChainSnapshot>();
   const [attempt, setAttempt] = useState<Attempt>();
   const [busy, setBusy] = useState(false);
@@ -84,7 +85,7 @@ function Publisher({ config }: { config: TrustConfig }) {
   const boot = useRef<{ key: string; promise: ReturnType<typeof reconcileAttempt> } | undefined>(undefined);
   const finish = (result: Awaited<ReturnType<typeof publishAttempt>>) => {
     const saved = JSON.parse(readSaved("publish", config) ?? "null");
-    if (saved && !isCompletedAttempt(saved, config, result.packet)) throw new Error("Ett annat försök har sparats. Ladda om för att kontrollera det; det har inte raderats.");
+    if (saved && !isCompletedAttempt(saved, config, result.packet)) throw new Error("Another attempt was saved. Reload to check it; it has been kept.");
     setPublished({ body: result.packet.body, packet: result.packet, proof: result.proof, signature: "passed", status: result.packet.packageDigest === result.snapshot.digest ? "current" : "superseded", cached: false });
     setAttempt(undefined); clearAttempt(); setHead(result.snapshot); setStage("complete"); setRecovered(result.recovered); setError("");
   };
@@ -96,7 +97,7 @@ function Publisher({ config }: { config: TrustConfig }) {
       raw = readSaved("publish", config);
       const saved = JSON.parse(raw ?? "null");
       if (saved) { restored = restoreAttempt(saved, config); setAttempt(restored); setBody(restored.draft.body); }
-    } catch { setError("Det sparade utkastet kunde inte läsas. Granska texten på nytt."); inFlight.current = false; setBusy(false); return; }
+    } catch { setError("The saved draft could not be read. Review the message again."); inFlight.current = false; setBusy(false); return; }
     const key = `${attemptKey}:${raw}`; // Actual bytes, never just a claimed ID/digest.
     if (boot.current?.key !== key) boot.current = { key, promise: restored ? reconcileAttempt(config, restored) :
       readSnapshot(rpcClient(config), config).then(snapshot => ({ snapshot, result: null })) };
@@ -105,10 +106,10 @@ function Publisher({ config }: { config: TrustConfig }) {
       setHead(value.snapshot);
       if (value.result) {
         const current = readSaved("publish", config);
-        if (current !== raw && current !== "null") { setError("Ett annat försök har sparats. Ladda om för att kontrollera det; det har inte raderats."); return; }
+        if (current !== raw && current !== "null") { setError("Another attempt was saved. Reload to check it; it has been kept."); return; }
         finish(value.result);
-      } else if (restored && mayHaveSent(restored)) setError("Transaktionsutfallet är ännu okänt. Behåll försöket och fortsätt kontrollera; ingen ny transaktion skickas.");
-    }).catch(cause => { if (active) setError(cause instanceof ChainCheckUnavailable || cause instanceof StorageCheckUnavailable ? cause.message : "Återställningen kunde inte slutföras. Kontrollera RPC, registerbevis och lagring; försöket behålls."); })
+      } else if (restored && mayHaveSent(restored)) setError("Transaction outcome unknown. Keep this attempt and check again; no new transaction will be sent.");
+    }).catch(cause => { if (active) setError(cause instanceof ChainCheckUnavailable || cause instanceof StorageCheckUnavailable ? cause.message : "Recovery could not finish. Check the connection, publication evidence and storage. Your attempt is kept."); })
       .finally(() => { if (active) { inFlight.current = false; setBusy(false); } });
     return () => { active = false; };
   }, [config, attemptKey]);
@@ -122,7 +123,7 @@ function Publisher({ config }: { config: TrustConfig }) {
     try {
       const latest = await readSnapshot(rpcClient(config), config); setHead(latest);
       persist({ draft: freezeDraft(body, config, latest) });
-    } catch { setError("Utkastet kunde inte förberedas. Kontrollera text, nätverk och kontrakt."); }
+    } catch { setError("Unable to prepare the draft. Check the text and network connection."); }
     finally { inFlight.current = false; setBusy(false); }
   };
   const send = async () => {
@@ -135,28 +136,28 @@ function Publisher({ config }: { config: TrustConfig }) {
       setStage(undefined);
       const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
       const message = cause instanceof Error ? cause.message : "";
-      setError(cause instanceof ChainCheckUnavailable ? cause.message : code === 4001 || /rejected|denied/i.test(message) ? "Walletdialogen avbröts. Publiceringen är inte färdig. Du kan försöka igen med samma paket." :
+      setError(cause instanceof ChainCheckUnavailable ? cause.message : code === 4001 || /rejected|denied/i.test(message) ? "Wallet request cancelled. Nothing is confirmed; retry the same message." :
         /wallet|konto|nätverk|version|Lagring|lagring|Transaktion|publiceringspost|Serien|Granska/i.test(message) && message.length < 250 ? message :
-          `Bekräftelsen kunde inte slutföras. Kontrollera wallet, API och ${activeProfile.label}. Ett skickat paket behålls; fortsätt för att kontrollera utfallet.`);
+          "Confirmation could not finish. Your sent message is kept. Continue checking its outcome.");
     } finally { inFlight.current = false; setBusy(false); }
   };
   return <>
-    <header className="page-heading"><p className="eyebrow">ALEX · PUBLICERARE</p><h1>Ett tydligt meddelande.</h1><p>Publicera till volontärflödet Övning Norr.</p></header>
+    <header className="page-heading"><p className="eyebrow">Alex</p><h1>New update</h1></header>
     <section className="composer">
-      <div className="message-meta"><h2>{attempt ? `Granska version ${attempt.draft.message.version}` : head?.version ? `Skriv uppdatering · Version ${head.version + 1}` : "Skriv ett meddelande"}</h2><span className="muted">Till Kim</span></div>
-      {attempt ? <><p className="message-body review-text" data-testid="frozen-body">{attempt.draft.body}</p><p className="muted">Den här exakta texten ingår i signeringen.</p></> :
-        <><label htmlFor="message-text">Meddelande</label><textarea id="message-text" value={body} maxLength={4000} disabled={busy} onChange={event => setBody(event.target.value)} rows={6} /><p className="character-count">{body.length} / 4 000</p></>}
+      <div className="message-meta"><h2>{attempt ? `Review version ${attempt.draft.message.version}` : head?.version ? `Write update · Version ${head.version + 1}` : "New message"}</h2><span className="muted">To Kim</span></div>
+      {attempt ? <><p className="message-body review-text" data-testid="frozen-body">{attempt.draft.body}</p><p className="muted">This exact text will be signed.</p></> :
+        <><label htmlFor="message-text">Message</label><textarea id="message-text" value={body} maxLength={4000} disabled={busy} onChange={event => setBody(event.target.value)} rows={6} /><p className="character-count">{body.length} / 4 000</p></>}
       <div className="actions">{attempt ? <>
-        <button className="primary" disabled={busy} onClick={() => { void send(); }}>{mayHaveSent(attempt) ? "Fortsätt kontrollera" : attempt.packet ? "Fortsätt publiceringen" : "Signera och publicera"}<span aria-hidden="true">↗</span></button>
-        <button className="secondary" disabled={busy || mayHaveSent(attempt)} onClick={() => { setAttempt(undefined); setStage(undefined); setError(""); clearAttempt(); }}>Redigera texten</button>
-      </> : <button className="primary" disabled={busy || !body.length} onClick={() => { void review(); }}>{busy ? "Förbereder…" : "Granska meddelandet"}<span aria-hidden="true">→</span></button>}</div>
-      {stage && <p className={`notice ${stage === "complete" ? "success" : ""}`} role="status">{stage === "complete" && recovered && published?.packet ? `Version ${published.packet.message.version} var redan publicerad och har återställts.` : <>{stageLabels[stage]}{stage === "complete" && published?.packet ? ` · Version ${published.packet.message.version}` : ""}</>}</p>}
-      {error && <p className="notice warning" role="alert">{error}</p>}
-      {attempt?.txHash && <p className="muted">Transaktionen har skickats. Fortsätt med samma paket för att kontrollera utfallet.</p>}
+        <button className="primary" disabled={busy} onClick={() => { void send(); }}>{mayHaveSent(attempt) ? "Continue checking" : attempt.packet ? "Continue publishing" : "Sign and publish"}<span aria-hidden="true">↗</span></button>
+        <button className="secondary" disabled={busy || mayHaveSent(attempt)} onClick={() => { setAttempt(undefined); setStage(undefined); setError(""); clearAttempt(); }}>Edit message</button>
+      </> : <button className="primary" disabled={busy || !body.length} onClick={() => { void review(); }}>{busy ? "Preparing…" : "Review message"}<span aria-hidden="true">→</span></button>}</div>
+      {stage && <p className={`notice ${stage === "complete" ? "success" : ""}`} role="status">{stage === "complete" && recovered && published?.packet ? `Version ${published.packet.message.version} was already published and has been recovered.` : <>{stageLabels[stage]}{stage === "complete" && published?.packet ? ` · Version ${published.packet.message.version}` : ""}</>}</p>}
+      {error && <p className="notice warning" role="alert">{englishNotice(error)}</p>}
+      {attempt?.txHash && <p className="muted">Transaction sent. Continue checking this message.</p>}
     </section>
-    {attempt?.packet && <details className="evidence"><summary>Visa sparat publiceringsförsök</summary><dl>
-      <dt>Paketdigest</dt><dd>{attempt.packet.packageDigest}</dd><dt>Transaktionshash</dt><dd>{attempt.txHash ?? "Saknas"}</dd>
-      <dt>Transaktionsanrop påbörjat</dt><dd>{attempt.transactionRequested ? "Ja" : "Nej"}</dd>
+    {attempt?.packet && <details className="evidence"><summary>Saved publication attempt</summary><dl>
+      <dt>Package digest</dt><dd>{attempt.packet.packageDigest}</dd><dt>Transaction hash</dt><dd>{attempt.txHash ?? "Missing"}</dd>
+      <dt>Transaction requested</dt><dd>{attempt.transactionRequested ? "Yes" : "No"}</dd>
     </dl></details>}
     <Details entry={published} config={config} snapshot={head} />
   </>;
@@ -165,17 +166,18 @@ function App() {
   const [config, setConfig] = useState<TrustConfig>();
   const [error, setError] = useState("");
   useEffect(() => {
-    document.title = location.pathname === "/publish" ? "Publicera · Krismeddelanden" : "Övning Norr · Krismeddelanden";
+    document.documentElement.lang = "en";
+    document.title = location.pathname === "/publish" ? "Publish · Crisis messages" : "North exercise · Crisis messages";
     const controller = new AbortController();
     void fetch("/deployment.json", { cache: "no-store", signal: controller.signal }).then(async response => {
       if (!response.ok) throw new Error(); return parseConfig(await response.json(), activeProfile.id);
-    }).then(setConfig).catch(() => { if (!controller.signal.aborted) setError(`Deploymentkonfiguration för ${activeProfile.label} saknas eller är ogiltig. Kontrollera ${activeProfile.id === "local" ? "local:init" : "sepolia:check"} före uppstart.`); });
+    }).then(setConfig).catch(() => { if (!controller.signal.aborted) setError(`Deployment configuration is missing or invalid. Run ${activeProfile.id === "local" ? "local:init" : "sepolia:check"} before starting.`); });
     return () => controller.abort();
   }, []);
   const publisher = location.pathname === "/publish";
   return <main className={`live-app ${publisher ? "publisher" : "inbox"}`}>
-    <nav className="topline"><a className="wordmark" href={publisher ? "/publish" : "/inbox"}>Krismeddelanden<span aria-hidden="true">↗</span></a><span>{activeProfile.label} · Demoorganisation</span></nav>
-    {config ? publisher ? <Publisher config={config} /> : <Inbox config={config} /> : <p className="notice" role="status">{error || "Läser lokal tillitskonfiguration…"}</p>}
+    <nav className="topline"><a className="wordmark" href={publisher ? "/publish" : "/inbox"}>Crisis messages<span aria-hidden="true">↗</span></a></nav>
+    {config ? publisher ? <Publisher config={config} /> : <Inbox config={config} /> : <p className="notice" role="status">{error || "Loading…"}</p>}
   </main>;
 }
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);

@@ -36,26 +36,26 @@ test("separate publisher/recipient browser contexts, real API/SQLite/EVM and pre
   const text = "Samling 14.00.\nTa med vatten och reflexväst. 🌧";
   await t.test("author reviews exact text; cancellation is honest and retry survives reload", async () => {
     await recipient.goto(`${origin}/inbox`);
-    await recipient.getByRole("heading", { name: "Inget meddelande ännu" }).waitFor();
+    await recipient.getByRole("heading", { name: "No messages yet" }).waitFor();
     assert.equal(await recipient.evaluate(() => typeof window.ethereum), "undefined");
     await publisher.goto(`${origin}/publish`);
     assert.equal(await publisher.evaluate(() => typeof window.ethereum?.request), "function");
-    await publisher.getByLabel("Meddelande", { exact: true }).fill(text);
-    await publisher.getByRole("button", { name: "Granska meddelandet" }).click();
+    await publisher.getByLabel("Message", { exact: true }).fill(text);
+    await publisher.getByRole("button", { name: "Review message" }).click();
     await publisher.getByTestId("frozen-body").waitFor();
     assert.equal(await publisher.getByTestId("frozen-body").textContent(), text);
     rejectSign = true;
-    await publisher.getByRole("button", { name: "Signera och publicera" }).click();
+    await publisher.getByRole("button", { name: "Sign and publish" }).click();
     await publisher.getByRole("alert").waitFor();
-    assert.match(await publisher.getByRole("alert").innerText(), /Walletdialogen avbröts/, walletMethods.join(", "));
+    assert.match(await publisher.getByRole("alert").innerText(), /Wallet request cancelled/, walletMethods.join(", "));
     rejectSign = false; rejectTransaction = true;
-    await publisher.getByRole("button", { name: "Signera och publicera" }).click();
-    await publisher.getByRole("button", { name: "Fortsätt publiceringen" }).waitFor();
-    await publisher.getByRole("alert").filter({ hasText: "Walletdialogen avbröts" }).waitFor();
+    await publisher.getByRole("button", { name: "Sign and publish" }).click();
+    await publisher.getByRole("button", { name: "Continue publishing" }).waitFor();
+    await publisher.getByRole("alert").filter({ hasText: "Wallet request cancelled" }).waitFor();
     assert.equal((await env.receive()).length, 1);
     await publisher.reload(); rejectTransaction = false;
-    await publisher.getByRole("button", { name: "Fortsätt publiceringen" }).click();
-    await publisher.getByRole("status").filter({ hasText: "Publicerat och bekräftat" }).waitFor();
+    await publisher.getByRole("button", { name: "Continue publishing" }).click();
+    await publisher.getByRole("status").filter({ hasText: "Published and confirmed" }).waitFor();
     const current = recipient.locator('[data-status="current"]');
     await current.waitFor(); assert.equal(await current.getByTestId("message-body").textContent(), text);
     await recipient.reload(); await recipient.locator('[data-status="current"]').waitFor();
@@ -70,10 +70,10 @@ test("separate publisher/recipient browser contexts, real API/SQLite/EVM and pre
     await demoAction(env.dbPath, env.backupPath, "restore");
   });
   await t.test("legitimate update arrives automatically and old text remains superseded", async () => {
-    await publisher.getByLabel("Meddelande", { exact: true }).fill("Samling 16.00. Ta med vatten.");
-    await publisher.getByRole("button", { name: "Granska meddelandet" }).click();
-    await publisher.getByRole("button", { name: "Signera och publicera" }).click();
-    await publisher.getByRole("status").filter({ hasText: "Publicerat och bekräftat" }).waitFor();
+    await publisher.getByLabel("Message", { exact: true }).fill("Samling 16.00. Ta med vatten.");
+    await publisher.getByRole("button", { name: "Review message" }).click();
+    await publisher.getByRole("button", { name: "Sign and publish" }).click();
+    await publisher.getByRole("status").filter({ hasText: "Published and confirmed" }).waitFor();
     await recipient.locator('[data-status="current"]').filter({ hasText: "Version 2" }).waitFor();
     assert.equal(await recipient.locator('[data-status="superseded"] [data-testid="message-body"]').textContent(), text);
     assert.equal(await recipient.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
@@ -98,7 +98,7 @@ test("separate publisher/recipient browser contexts, real API/SQLite/EVM and pre
     await cold.locator('[data-status="superseded"]').waitFor();
     await demoAction(env.dbPath, env.backupPath, "delete-content");
     await cold.evaluate(() => localStorage.clear()); await cold.reload();
-    await cold.getByRole("heading", { name: "Meddelandets innehåll saknas" }).waitFor();
+    await cold.getByRole("heading", { name: "Message content missing" }).waitFor();
     assert.equal(await cold.getByTestId("message-body").count(), 0);
     await coldContext.close(); await demoAction(env.dbPath, env.backupPath, "restore");
   });
@@ -107,9 +107,27 @@ test("separate publisher/recipient browser contexts, real API/SQLite/EVM and pre
     await recipient.route(env.config.rpcUrl, route => route.abort());
     await recipient.locator('[data-status="unavailable"]').first().waitFor();
     assert.equal(await recipient.locator('[data-status="current"]').count(), 0);
-    await recipient.getByRole("status").filter({ hasText: "Aktuell status kan inte kontrolleras" }).waitFor();
+    await recipient.getByRole("status").filter({ hasText: "Current status unavailable" }).waitFor();
     await recipient.unrouteAll();
     await recipient.locator('[data-status="current"]').waitFor();
+  });
+  await t.test("English phone-width views flex from small mobile to desktop", async () => {
+    for (const page of [publisher, recipient]) {
+      for (const width of [320, 390, 768, 1440]) {
+        await page.setViewportSize({ width, height: 844 });
+        const layout = await page.evaluate(() => ({
+          width: document.querySelector("main")!.getBoundingClientRect().width,
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          lang: document.documentElement.lang,
+        }));
+        assert.ok(layout.width <= 440 && layout.width <= width);
+        assert.equal(layout.overflow, false); assert.equal(layout.lang, "en");
+      }
+      assert.doesNotMatch(await page.locator("main").innerText(), /PRENUMERERAR|Demoorganisation|Lokalt EVM-nät/);
+      await page.setViewportSize({ width: 390, height: 844 });
+    }
+    await publisher.screenshot({ path: `${root}output/playwright/publisher-mobile.png`, fullPage: true });
+    await recipient.screenshot({ path: `${root}output/playwright/inbox-mobile.png`, fullPage: true });
   });
   await t.test("unmodified presentation still has five scenarios and working publication", async () => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });

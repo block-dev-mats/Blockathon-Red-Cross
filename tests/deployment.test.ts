@@ -95,9 +95,9 @@ test("real EIP1193 test device drives /deploy then shared publish/inbox; unknown
   assert.equal((await fetch(`${origin}/deploy`)).status, 404);
   await recipient.goto(`${origin}/inbox`); assert.equal(await recipient.evaluate(() => typeof window.ethereum), "undefined");
   await page.goto(`${origin}/publish`);
-  await page.getByRole("button", { name: "Granska meddelandet" }).click();
-  await page.getByRole("button", { name: "Signera och publicera" }).click();
-  await page.getByRole("status").filter({ hasText: "Publicerat och bekräftat" }).waitFor();
+  await page.getByRole("button", { name: "Review message" }).click();
+  await page.getByRole("button", { name: "Sign and publish" }).click();
+  await page.getByRole("status").filter({ hasText: "Published and confirmed" }).waitFor();
   await recipient.locator('[data-status="current"]').waitFor(); await recipient.reload(); await recipient.locator('[data-status="current"]').waitFor();
   assert.equal(sends, 2); assert.deepEqual(errors, []);
 

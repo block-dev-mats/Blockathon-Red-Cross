@@ -168,42 +168,42 @@ test("shared product with two isolated profiles (Sepolia settings emulated offli
         assert.equal((await fetch(`${base}/api/health`)).status, 200); // Port conflict killed nothing.
       }
       const l = `http://127.0.0.1:${local.frontendPort}`, s = `http://127.0.0.1:${sepolia.frontendPort}`;
-      await localPage.goto(`${l}/publish`); await localPage.getByText("Lokalt EVM-nät · Demoorganisation", { exact: true }).waitFor();
-      await localPage.getByRole("button", { name: "Granska meddelandet" }).click(); await localPage.getByTestId("frozen-body").waitFor();
+      await localPage.goto(`${l}/publish`); await localPage.getByRole("heading", { name: "New update", exact: true }).waitFor();
+      await localPage.getByRole("button", { name: "Review message" }).click(); await localPage.getByTestId("frozen-body").waitFor();
       const localStorageCopy = await localPage.evaluate(() => Object.fromEntries(Object.entries(localStorage)));
       const localAttemptKey = Object.keys(localStorageCopy).find(k => k.startsWith("crisis-publish:"))!;
       const legacyKey = `crisis-publish:${local.config.domain.verifyingContract}:${local.config.codeHash}`;
       await localPage.evaluate(({ key, old, value }) => { localStorage.removeItem(key); localStorage.setItem(old, value); }, { key: localAttemptKey, old: legacyKey, value: localStorageCopy[localAttemptKey] });
       await localPage.reload(); await localPage.getByTestId("frozen-body").waitFor();
-      await localPage.getByRole("button", { name: "Redigera texten" }).click(); await localPage.reload();
+      await localPage.getByRole("button", { name: "Edit message" }).click(); await localPage.reload();
       assert.equal(await localPage.getByTestId("frozen-body").count(), 0);
       assert.ok(await localPage.evaluate(key => localStorage.getItem(key), legacyKey)); // Original data retained, not destructively migrated.
-      await publisher.goto(`${s}/publish`); await publisher.getByText("Sepolia · Demoorganisation", { exact: true }).waitFor();
+      await publisher.goto(`${s}/publish`); await publisher.getByRole("heading", { name: "New update", exact: true }).waitFor();
       assert.equal(await publisher.getByTestId("frozen-body").count(), 0);
       await publisher.evaluate(value => { for (const [key, data] of Object.entries(value)) localStorage.setItem(key, data); }, localStorageCopy);
       await publisher.reload(); assert.equal(await publisher.getByTestId("frozen-body").count(), 0);
       await recipient.goto(`${s}/inbox`); await recipient.locator('[data-status="current"]').waitFor();
       assert.equal(await recipient.evaluate(() => typeof window.ethereum), "undefined");
       await recipient.locator("summary").first().click();
-      assert.equal(await recipient.getByRole("link", { name: "Kontrakt", exact: true }).getAttribute("href"), `https://sepolia.etherscan.io/address/${sepolia.config.domain.verifyingContract}`);
-      await publisher.getByLabel("Meddelande", { exact: true }).fill("Sepolia-profilens uppdatering 16.00.");
-      await publisher.getByRole("button", { name: "Granska meddelandet" }).click(); await publisher.getByTestId("frozen-body").waitFor();
+      assert.equal(await recipient.getByRole("link", { name: "Contract", exact: true }).getAttribute("href"), `https://sepolia.etherscan.io/address/${sepolia.config.domain.verifyingContract}`);
+      await publisher.getByLabel("Message", { exact: true }).fill("Sepolia-profilens uppdatering 16.00.");
+      await publisher.getByRole("button", { name: "Review message" }).click(); await publisher.getByTestId("frozen-body").waitFor();
       const keys = await publisher.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith("crisis-publish:")));
       assert.equal(keys.length, 2); assert.ok(keys.includes(localAttemptKey));
       const activeKey = keys.find(k => k !== localAttemptKey)!;
       const goodAttempt = await publisher.evaluate(key => localStorage.getItem(key)!, activeKey);
       await publisher.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: activeKey, value: localStorageCopy[localAttemptKey] });
-      await publisher.reload(); await publisher.getByRole("alert").filter({ hasText: "Det sparade utkastet" }).waitFor();
+      await publisher.reload(); await publisher.getByRole("alert").filter({ hasText: "The saved draft" }).waitFor();
       assert.equal(await publisher.getByTestId("frozen-body").count(), 0);
       await publisher.evaluate(({ key, value }) => localStorage.setItem(key, value), { key: activeKey, value: goodAttempt });
-      await publisher.reload(); await publisher.getByRole("button", { name: "Signera och publicera" }).click();
-      await publisher.getByRole("status").filter({ hasText: "Publicerat och bekräftat" }).waitFor();
+      await publisher.reload(); await publisher.getByRole("button", { name: "Sign and publish" }).click();
+      await publisher.getByRole("status").filter({ hasText: "Published and confirmed" }).waitFor();
       await recipient.locator('[data-status="current"]').filter({ hasText: "Version 2" }).waitFor();
       await recipient.locator('[data-status="superseded"]').waitFor();
       assert.equal(await recipient.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       assert.deepEqual(counts, { signs: 2, transactions: 2 });
       await sepolia.restartApi(); await recipient.reload(); await recipient.locator('[data-status="current"]').waitFor();
-      await localPage.goto(`${l}/inbox`); await localPage.getByRole("heading", { name: "Inget meddelande ännu" }).waitFor();
+      await localPage.goto(`${l}/inbox`); await localPage.getByRole("heading", { name: "No messages yet" }).waitFor();
       assert.equal((await local.receive()).length, 0); assert.equal((await sepolia.receive()).length, 2);
       // Test-controlled sentinel files, never deployment secrets or keystores.
       const created: string[] = [];

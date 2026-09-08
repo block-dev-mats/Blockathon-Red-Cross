@@ -51,7 +51,7 @@ export class InboxVerifier {
       let packet: Envelope;
       try { packet = await verifyEnvelope(raw, this.config); }
       catch {
-        const body = raw && typeof raw === "object" && "body" in raw && typeof raw.body === "string" ? raw.body.slice(0, 4000) : "Text saknas eller paketformatet är ogiltigt.";
+        const body = raw && typeof raw === "object" && "body" in raw && typeof raw.body === "string" ? raw.body.slice(0, 4000) : "Text is missing or the message format is invalid.";
         return { body, signature: "failed", status: "failed", reason: "Text, signatur eller sammanhang stämmer inte.", cached };
       }
       if (!snapshot) return { packet, body: packet.body, signature: "passed", status: "unavailable", cached };

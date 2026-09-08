@@ -43,8 +43,8 @@ test("mined EIP-7702 publication recovers on reload without wallet and unlocks v
   await context.addInitScript("window.ethereum = {request: r => window.walletRequest(r)};");
   await page.route("**/api/messages/*/confirm", route => blockConfirmation ? route.fulfill({ status: 503, body: '{}' }) : route.continue());
   await page.goto(`http://127.0.0.1:${env.frontendPort}/publish`);
-  await page.getByRole("button", {name:"Granska meddelandet"}).click();
-  await page.getByRole("button", {name:"Signera och publicera"}).click();
+  await page.getByRole("button", {name:"Review message"}).click();
+  await page.getByRole("button", {name:"Sign and publish"}).click();
   await page.getByRole("alert").waitFor();
   assert.ok(publishedHash);
   const snapshot = await readSnapshot(env.client, env.config); assert.equal(snapshot.version, 1);
@@ -54,15 +54,15 @@ test("mined EIP-7702 publication recovers on reload without wallet and unlocks v
   assert.notEqual(receipt.to?.toLowerCase(), env.config.domain.verifyingContract);
   assert.equal((await publicationProof(env.client, env.config, packet, snapshot))?.txHash, publishedHash);
   assert.equal(env.api.store.db.prepare("SELECT tx_hash FROM messages").get()!.tx_hash, null);
-  assert.equal(await page.getByRole("button", {name:"Redigera texten"}).isDisabled(), true);
+  assert.equal(await page.getByRole("button", {name:"Edit message"}).isDisabled(), true);
   const saved = await page.evaluate(() => Object.fromEntries(Object.entries(localStorage).filter(([k]) => k.startsWith("crisis-publish:"))));
   assert.ok(JSON.parse(Object.values(saved)[0]).txHash);
   assert.equal(isCompletedAttempt(JSON.parse(Object.values(saved)[0]), env.config, packet), true);
   assert.equal(isCompletedAttempt({ draft: freezeDraft("Ett annat utkast", env.config, snapshot) }, env.config, packet), false);
   const before = methods.length; forbidWallet = true; blockConfirmation = false;
   await env.restartApi(); await page.reload();
-  await page.getByRole("heading", {name:"Skriv uppdatering · Version 2"}).waitFor();
-  await page.getByRole("status").filter({hasText:"Version 1 var redan publicerad och har återställts."}).waitFor();
+  await page.getByRole("heading", {name:"Write update · Version 2"}).waitFor();
+  await page.getByRole("status").filter({hasText:"Version 1 was already published and has been recovered."}).waitFor();
   assert.equal(methods.length, before); assert.equal(env.api.store.db.prepare("SELECT tx_hash FROM messages").get()!.tx_hash, publishedHash);
   assert.equal(await page.evaluate(() => Object.entries(localStorage).filter(([k]) => k.startsWith("crisis-publish:")).every(([,v]) => v === "null")), true);
 
@@ -78,12 +78,12 @@ test("mined EIP-7702 publication recovers on reload without wallet and unlocks v
   }
   // Unknown outcome keeps both actual stored bytes and the no-discard barrier.
   forbidWallet = false; unknownSend = true;
-  await page.getByLabel("Meddelande",{exact:true}).fill("Samling 16.00.");
-  await page.getByRole("button",{name:"Granska meddelandet"}).click(); await page.getByRole("button",{name:"Signera och publicera"}).click();
+  await page.getByLabel("Message",{exact:true}).fill("Samling 16.00.");
+  await page.getByRole("button",{name:"Review message"}).click(); await page.getByRole("button",{name:"Sign and publish"}).click();
   await page.getByRole("alert").waitFor(); const unknownCalls = methods.length; forbidWallet = true;
-  await page.reload(); await page.getByRole("button",{name:"Fortsätt kontrollera"}).waitFor();
-  assert.equal(await page.getByRole("button",{name:"Redigera texten"}).isDisabled(),true);
-  await page.getByRole("button",{name:"Fortsätt kontrollera"}).click(); await page.getByRole("alert").filter({hasText:"utfall är okänt"}).waitFor();
+  await page.reload(); await page.getByRole("button",{name:"Continue checking"}).waitFor();
+  assert.equal(await page.getByRole("button",{name:"Edit message"}).isDisabled(),true);
+  await page.getByRole("button",{name:"Continue checking"}).click(); await page.getByRole("alert").filter({hasText:"outcome is unknown"}).waitFor();
   assert.equal(methods.length,unknownCalls); assert.equal((await readSnapshot(env.client,env.config)).version,1);
 });
 
