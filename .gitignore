@@ -11,3 +11,12 @@ output/
 .playwright-cli/
 *.log
 .DS_Store
+
+# Local chain, deployment trust, generated wallets and synthetic SQLite data.
+.local/
+.local-backups/
+artifacts/
+cache/
+test-results/
+*.key
+*.sqlite*
