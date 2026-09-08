@@ -1,6 +1,6 @@
 import { deploymentIdentity, verifyEnvelope } from "../../shared/protocol.ts";
 import type { Envelope, TrustConfig } from "../../shared/protocol.ts";
-import { assertSnapshot, publicationProof, readSnapshot, rpcClient, VerificationMismatch } from "../../shared/chain.ts";
+import { assertSnapshot, publicationProof, readSnapshot, rpcClient, VerificationMismatch, ChainCheckUnavailable } from "../../shared/chain.ts";
 import type { ChainSnapshot, PublicationProof } from "../../shared/chain.ts";
 import { profileForChain } from "../../shared/profiles.ts";
 
@@ -63,7 +63,7 @@ export class InboxVerifier {
         if (error instanceof VerificationMismatch) return { packet, body: packet.body, signature: "passed", status: "failed", reason: error.message, cached };
         // A matching signature does not prove publication. Missing/failed RPC
         // evidence is conservatively unavailable, never a positive result.
-        return { packet, body: packet.body, signature: "passed", status: "unavailable", reason: "Publiceringsunderlaget kunde inte bekräftas.", cached };
+        return { packet, body: packet.body, signature: "passed", status: "unavailable", reason: error instanceof ChainCheckUnavailable ? error.message : "Publiceringsunderlaget kunde inte bekräftas.", cached };
       }
     };
     // Collapse byte-identical deliveries within this fetch only. This is never

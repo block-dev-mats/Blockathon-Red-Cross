@@ -18,17 +18,56 @@ export function restoreAttempt(raw: unknown, config: TrustConfig): Attempt {
   Object.freeze(attempt.draft.domain); Object.freeze(attempt.draft.message); Object.freeze(attempt.draft);
   return attempt as Attempt;
 }
+export function isCompletedAttempt(raw: unknown, config: TrustConfig, packet: Envelope) {
+  const current = restoreAttempt(raw, config);
+  return current.draft.body === packet.body && JSON.stringify(current.draft.domain) === JSON.stringify(packet.domain) &&
+    JSON.stringify(current.draft.message) === JSON.stringify(packet.message) &&
+    (!current.packet || JSON.stringify(current.packet) === JSON.stringify(packet));
+}
 export type Stage = "wallet" | "signing" | "storing" | "transaction" | "confirming" | "complete";
+export class StorageCheckUnavailable extends Error {}
 export async function apiPost(path: string, body: unknown, timeout = 10000) {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeout) });
-  if (!response.ok) throw new Error("Lagringen kunde inte bekräftas. Försök igen med samma paket.");
+  if (!response.ok) {
+    const detail = z.object({ code: z.literal("CHAIN_CHECK_UNAVAILABLE"), error: z.string().max(200) }).safeParse(await response.json().catch(() => null));
+    throw new StorageCheckUnavailable(detail.success ? `Lagringens kedjekontroll: ${detail.data.error}` : "Lagringen kunde inte bekräftas. Försök igen med samma paket.");
+  }
 }
+const defaultPost = (config: TrustConfig) => (path: string, body: unknown) => apiPost(path, body, profileForChain(config.domain.chainId).apiTimeout);
+export async function reconcileAttempt(config: TrustConfig, value: Attempt, post = defaultPost(config), client = rpcClient(config)) {
+  const attempt = restoreAttempt(value, config);
+  const packet = attempt.packet ? await verifyEnvelope(attempt.packet, config) : undefined;
+  const snapshot = await readSnapshot(client, config);
+  const proof = packet ? await publicationProof(client, config, packet, snapshot) : null;
+  await assertSnapshot(client, snapshot);
+  if (!packet || !proof) return { snapshot, result: null };
+  // Durable storage/confirmation can be retried without ANY wallet access.
+  await post("/api/messages", packet);
+  await post(`/api/messages/${packet.packageDigest}/confirm`, { txHash: proof.txHash });
+  const latest = await readSnapshot(client, config);
+  await assertSnapshot(client, snapshot); await assertSnapshot(client, latest);
+  return { snapshot: latest, result: { packet, proof, snapshot: latest, recovered: true } };
+}
+export function mayHaveSent(attempt: Attempt) { return Boolean(attempt.txHash || attempt.transactionRequested); }
 export async function publishAttempt(config: TrustConfig, provider: EIP1193Provider | undefined, attempt: Attempt,
-  stage: (stage: Stage) => void, persist: (attempt: Attempt) => void, post = (path: string, body: unknown) => apiPost(path, body, profileForChain(config.domain.chainId).apiTimeout)) {
+  stage: (stage: Stage) => void, persist: (attempt: Attempt) => void, post = defaultPost(config)) {
   const restored = restoreAttempt(attempt, config);
   attempt.draft = restored.draft;
   const profile = profileForChain(config.domain.chainId);
   const client = rpcClient(config);
+  if (attempt.packet) {
+    stage("confirming");
+    const recovered = await reconcileAttempt(config, attempt, post, client);
+    if (recovered.result) { stage("complete"); return recovered.result; }
+    if (attempt.txHash) {
+      const receipt = await client.waitForTransactionReceipt({ hash: attempt.txHash, confirmations: 1, timeout: profile.receiptTimeout, pollingInterval: profile.receiptPollInterval });
+      if (receipt.status !== "success") throw new Error("Transaktionen misslyckades. Försöket behålls för kontroll.");
+      const after = await reconcileAttempt(config, attempt, post, client);
+      if (!after.result) throw new Error("Matchande publiceringspost saknas.");
+      stage("complete"); return after.result;
+    }
+    if (attempt.transactionRequested) throw new Error("Walletens transaktionsutfall är okänt. Fortsätt kontrollera samma paket; ingen ny transaktion skickas.");
+  }
   stage("wallet");
   if (!provider) throw new Error("Ingen browser-wallet hittades. Öppna publiceringsvyn i en webbläsare med en installerad wallet.");
   const wallet = createWalletClient({ chain: chainFor(config), transport: custom(provider, { retryCount: 0 }) });
@@ -82,5 +121,5 @@ export async function publishAttempt(config: TrustConfig, provider: EIP1193Provi
   attempt.txHash = proof.txHash; persist({ ...attempt });
   await post(`/api/messages/${packet.packageDigest}/confirm`, { txHash: proof.txHash });
   stage("complete");
-  return { packet, proof, snapshot };
+  return { packet, proof, snapshot, recovered: false };
 }

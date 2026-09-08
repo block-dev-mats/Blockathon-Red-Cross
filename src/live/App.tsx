@@ -3,11 +3,11 @@ import { createRoot } from "react-dom/client";
 import type { EIP1193Provider } from "viem";
 import { freezeDraft, parseConfig } from "../../shared/protocol.ts";
 import type { TrustConfig } from "../../shared/protocol.ts";
-import { readSnapshot, rpcClient } from "../../shared/chain.ts";
+import { readSnapshot, rpcClient, ChainCheckUnavailable } from "../../shared/chain.ts";
 import type { ChainSnapshot } from "../../shared/chain.ts";
 import { cacheKey, emptyInbox, InboxVerifier } from "./inbox.ts";
 import type { CheckedMessage, InboxState } from "./inbox.ts";
-import { publishAttempt, restoreAttempt } from "./publish.ts";
+import { publishAttempt, restoreAttempt, reconcileAttempt, mayHaveSent, isCompletedAttempt, StorageCheckUnavailable } from "./publish.ts";
 import type { Attempt, Stage } from "./publish.ts";
 import { activeProfile, readSaved, storageKey } from "./profile.ts";
 import "./live.css";
@@ -80,16 +80,36 @@ function Publisher({ config }: { config: TrustConfig }) {
   const [published, setPublished] = useState<CheckedMessage>();
   const inFlight = useRef(false);
   const attemptKey = storageKey("publish", config);
+  const [recovered, setRecovered] = useState(false);
+  const boot = useRef<{ key: string; promise: ReturnType<typeof reconcileAttempt> } | undefined>(undefined);
+  const finish = (result: Awaited<ReturnType<typeof publishAttempt>>) => {
+    const saved = JSON.parse(readSaved("publish", config) ?? "null");
+    if (saved && !isCompletedAttempt(saved, config, result.packet)) throw new Error("Ett annat försök har sparats. Ladda om för att kontrollera det; det har inte raderats.");
+    setPublished({ body: result.packet.body, packet: result.packet, proof: result.proof, signature: "passed", status: result.packet.packageDigest === result.snapshot.digest ? "current" : "superseded", cached: false });
+    setAttempt(undefined); clearAttempt(); setHead(result.snapshot); setStage("complete"); setRecovered(result.recovered); setError("");
+  };
   useEffect(() => {
     let active = true;
-    void readSnapshot(rpcClient(config), config).then(value => { if (active) setHead(value); }).catch(() => { if (active) setError("Nätverk eller kontrakt kunde inte kontrolleras."); });
+    inFlight.current = true; setBusy(true); setError("");
+    let raw: string | null, restored: Attempt | undefined;
     try {
-      const saved = JSON.parse(readSaved("publish", config) ?? "null");
-      if (saved) {
-        const restored = restoreAttempt(saved, config);
-        setAttempt(restored); setBody(restored.draft.body);
-      }
-    } catch { setError("Det sparade utkastet kunde inte läsas. Granska texten på nytt."); }
+      raw = readSaved("publish", config);
+      const saved = JSON.parse(raw ?? "null");
+      if (saved) { restored = restoreAttempt(saved, config); setAttempt(restored); setBody(restored.draft.body); }
+    } catch { setError("Det sparade utkastet kunde inte läsas. Granska texten på nytt."); inFlight.current = false; setBusy(false); return; }
+    const key = `${attemptKey}:${raw}`; // Actual bytes, never just a claimed ID/digest.
+    if (boot.current?.key !== key) boot.current = { key, promise: restored ? reconcileAttempt(config, restored) :
+      readSnapshot(rpcClient(config), config).then(snapshot => ({ snapshot, result: null })) };
+    void boot.current.promise.then(value => {
+      if (!active) return;
+      setHead(value.snapshot);
+      if (value.result) {
+        const current = readSaved("publish", config);
+        if (current !== raw && current !== "null") { setError("Ett annat försök har sparats. Ladda om för att kontrollera det; det har inte raderats."); return; }
+        finish(value.result);
+      } else if (restored && mayHaveSent(restored)) setError("Transaktionsutfallet är ännu okänt. Behåll försöket och fortsätt kontrollera; ingen ny transaktion skickas.");
+    }).catch(cause => { if (active) setError(cause instanceof ChainCheckUnavailable || cause instanceof StorageCheckUnavailable ? cause.message : "Återställningen kunde inte slutföras. Kontrollera RPC, registerbevis och lagring; försöket behålls."); })
+      .finally(() => { if (active) { inFlight.current = false; setBusy(false); } });
     return () => { active = false; };
   }, [config, attemptKey]);
   const persist = (value: Attempt) => {
@@ -98,7 +118,7 @@ function Publisher({ config }: { config: TrustConfig }) {
   };
   const clearAttempt = () => { try { localStorage.setItem(attemptKey, "null"); } catch { /* tombstone prevents restoring the retained legacy attempt */ } };
   const review = async () => {
-    if (inFlight.current) return; inFlight.current = true; setBusy(true); setError(""); setPublished(undefined); setStage(undefined);
+    if (inFlight.current) return; inFlight.current = true; setBusy(true); setError(""); setPublished(undefined); setStage(undefined); setRecovered(false);
     try {
       const latest = await readSnapshot(rpcClient(config), config); setHead(latest);
       persist({ draft: freezeDraft(body, config, latest) });
@@ -110,14 +130,12 @@ function Publisher({ config }: { config: TrustConfig }) {
     inFlight.current = true; setBusy(true); setError("");
     try {
       const result = await publishAttempt(config, window.ethereum, attempt, setStage, persist);
-      setPublished({ body: result.packet.body, packet: result.packet, proof: result.proof, signature: "passed", status: result.packet.packageDigest === result.snapshot.digest ? "current" : "superseded", cached: false });
-      setAttempt(undefined); clearAttempt();
-      setHead(result.snapshot);
+      finish(result);
     } catch (cause) {
       setStage(undefined);
       const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
       const message = cause instanceof Error ? cause.message : "";
-      setError(code === 4001 || /rejected|denied/i.test(message) ? "Walletdialogen avbröts. Publiceringen är inte färdig. Du kan försöka igen med samma paket." :
+      setError(cause instanceof ChainCheckUnavailable ? cause.message : code === 4001 || /rejected|denied/i.test(message) ? "Walletdialogen avbröts. Publiceringen är inte färdig. Du kan försöka igen med samma paket." :
         /wallet|konto|nätverk|version|Lagring|lagring|Transaktion|publiceringspost|Serien|Granska/i.test(message) && message.length < 250 ? message :
           `Bekräftelsen kunde inte slutföras. Kontrollera wallet, API och ${activeProfile.label}. Ett skickat paket behålls; fortsätt för att kontrollera utfallet.`);
     } finally { inFlight.current = false; setBusy(false); }
@@ -129,13 +147,17 @@ function Publisher({ config }: { config: TrustConfig }) {
       {attempt ? <><p className="message-body review-text" data-testid="frozen-body">{attempt.draft.body}</p><p className="muted">Den här exakta texten ingår i signeringen.</p></> :
         <><label htmlFor="message-text">Meddelande</label><textarea id="message-text" value={body} maxLength={4000} disabled={busy} onChange={event => setBody(event.target.value)} rows={6} /><p className="character-count">{body.length} / 4 000</p></>}
       <div className="actions">{attempt ? <>
-        <button className="primary" disabled={busy} onClick={() => { void send(); }}>{attempt.packet ? "Fortsätt publiceringen" : "Signera och publicera"}<span aria-hidden="true">↗</span></button>
-        <button className="secondary" disabled={busy || !!attempt.txHash || attempt.transactionRequested} onClick={() => { setAttempt(undefined); setStage(undefined); setError(""); clearAttempt(); }}>Redigera texten</button>
+        <button className="primary" disabled={busy} onClick={() => { void send(); }}>{mayHaveSent(attempt) ? "Fortsätt kontrollera" : attempt.packet ? "Fortsätt publiceringen" : "Signera och publicera"}<span aria-hidden="true">↗</span></button>
+        <button className="secondary" disabled={busy || mayHaveSent(attempt)} onClick={() => { setAttempt(undefined); setStage(undefined); setError(""); clearAttempt(); }}>Redigera texten</button>
       </> : <button className="primary" disabled={busy || !body.length} onClick={() => { void review(); }}>{busy ? "Förbereder…" : "Granska meddelandet"}<span aria-hidden="true">→</span></button>}</div>
-      {stage && <p className={`notice ${stage === "complete" ? "success" : ""}`} role="status">{stageLabels[stage]}{stage === "complete" && published?.packet ? ` · Version ${published.packet.message.version}` : ""}</p>}
+      {stage && <p className={`notice ${stage === "complete" ? "success" : ""}`} role="status">{stage === "complete" && recovered && published?.packet ? `Version ${published.packet.message.version} var redan publicerad och har återställts.` : <>{stageLabels[stage]}{stage === "complete" && published?.packet ? ` · Version ${published.packet.message.version}` : ""}</>}</p>}
       {error && <p className="notice warning" role="alert">{error}</p>}
       {attempt?.txHash && <p className="muted">Transaktionen har skickats. Fortsätt med samma paket för att kontrollera utfallet.</p>}
     </section>
+    {attempt?.packet && <details className="evidence"><summary>Visa sparat publiceringsförsök</summary><dl>
+      <dt>Paketdigest</dt><dd>{attempt.packet.packageDigest}</dd><dt>Transaktionshash</dt><dd>{attempt.txHash ?? "Saknas"}</dd>
+      <dt>Transaktionsanrop påbörjat</dt><dd>{attempt.transactionRequested ? "Ja" : "Nej"}</dd>
+    </dl></details>}
     <Details entry={published} config={config} snapshot={head} />
   </>;
 }

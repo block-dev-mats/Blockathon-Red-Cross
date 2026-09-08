@@ -1,9 +1,9 @@
 export type ProfileId = "local" | "sepolia";
 export const profiles = {
   local: { id: "local", chainId: 31337, label: "Lokalt EVM-nät", directory: ".local", frontendPort: 5175, apiPort: 3001,
-    rpcTimeout: 3500, apiTimeout: 10000, pollInterval: 2500, receiptTimeout: 25000, receiptPollInterval: 500 },
+    rpcTimeout: 3500, rpcMinInterval: 0, apiTimeout: 10000, pollInterval: 2500, receiptTimeout: 25000, receiptPollInterval: 500 },
   sepolia: { id: "sepolia", chainId: 11155111, label: "Sepolia", directory: ".sepolia", frontendPort: 5176, apiPort: 3002,
-    rpcTimeout: 12000, apiTimeout: 45000, pollInterval: 15000, receiptTimeout: 45000, receiptPollInterval: 4000 },
+    rpcTimeout: 12000, rpcMinInterval: 350, apiTimeout: 45000, pollInterval: 15000, receiptTimeout: 45000, receiptPollInterval: 4000 },
 } as const;
 export function profileById(id: unknown) {
   if (id !== "local" && id !== "sepolia") throw new Error("Välj uttryckligen profilen local eller sepolia.");

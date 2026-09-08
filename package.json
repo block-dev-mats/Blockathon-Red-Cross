@@ -18,10 +18,11 @@
     "demo": "node --import tsx scripts/demo.ts",
     "test:mvp": "npm run contract:build && node --import tsx --test tests/mvp.test.ts",
     "test:browser": "node --import tsx --test tests/browser.test.ts",
-    "check": "npm test && npm run test:mvp && npm run test:profiles && npm run test:deployment && npm run build",
+    "check": "npm test && npm run test:mvp && npm run test:profiles && npm run test:deployment && npm run test:recovery && npm run build",
     "sepolia:check": "npm run contract:build && node --import tsx scripts/sepolia.ts check",
     "sepolia:deploy": "npm run contract:build && node --import tsx scripts/runtime.ts sepolia",
     "sepolia:start": "node --import tsx scripts/runtime.ts sepolia",
+    "test:recovery": "npm run contract:build && node --import tsx --test tests/recovery.test.ts",
     "test:deployment": "npm run contract:build && node --import tsx --test tests/deployment.test.ts",
     "test:profiles": "node --import tsx --test tests/profiles.test.ts"
   },

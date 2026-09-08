@@ -4,7 +4,7 @@ import { access } from "node:fs/promises";
 import { z } from "zod";
 import { hex32, verifyEnvelope } from "../shared/protocol.ts";
 import type { TrustConfig } from "../shared/protocol.ts";
-import { assertSnapshot, publicationProof, readSnapshot, rpcClient } from "../shared/chain.ts";
+import { assertSnapshot, publicationProof, readSnapshot, rpcClient, ChainCheckUnavailable } from "../shared/chain.ts";
 import { MessageStore } from "./storage.ts";
 import { profileForChain } from "../shared/profiles.ts";
 
@@ -60,6 +60,9 @@ export async function startApi(config: TrustConfig, dbPath: string, port: number
       reply(404, { error: "Resursen finns inte." });
     } catch (error) {
       // Do not echo payloads, RPC errors or database contents into logs/responses.
+      if (error instanceof ChainCheckUnavailable) {
+        reply(503, { code: "CHAIN_CHECK_UNAVAILABLE", error: error.message }); return;
+      }
       reply(400, { error: error instanceof z.ZodError ? "Ogiltigt meddelandeformat." : "Åtgärden kunde inte bekräftas. Kontrollera lagring, paket och kedjestatus." });
     }
   });
